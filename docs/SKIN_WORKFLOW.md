@@ -18,11 +18,31 @@ recipes, notes and docs.
 
 | Session | Where it runs | What it can do |
 | --- | --- | --- |
-| Project thread (cloud) | Claude's sandbox | Plan, research, write docs, open PRs, post pictures in the thread. Cannot reach Blender. |
+| Project thread (cloud) | Claude's sandbox | Plan, research, write docs, open PRs, post pictures in the thread. |
+| Project thread with the PC linked | Claude's sandbox, reaching Noah's PC | Also drives Blender through the PC's Blender MCP and moves files with folder access to `C:\NoahCode\LMOD` (copy to the PC, pull renders back). No Remote Control session needed. |
 | Remote Control session | Noah's PC (`DESKTOP-OB7EUVQ`), in `C:\NoahCode\LMOD` | Everything in Blender through the MCP, git on the PC, export, packaging. |
 
-The cloud thread writes the brief, the PC session does the Blender work and pushes preview
-JPEGs, and the cloud thread posts them for Noah.
+Either way: the recipe is written and committed from git, Blender runs on the PC, preview
+JPEGs go to the `previews` branch, and the thread posts them for Noah. Piano'Maw was built
+entirely from a linked cloud thread.
+
+## Two skins at once (one PC, one Blender)
+
+Two threads can work on two skins at the same time without touching each other:
+
+- **Build headless.** Never open, save or switch files in the Blender window: another session
+  may be using its scene. Run the recipe in a separate background Blender instead:
+  `blender -b base\<champion>\<champion>_rigged.blend --python <recipe> -- <out dir> vN`.
+  The MCP's `execute_blender_code_for_cli` does this if `BLENDER_PATH` is set on the PC
+  (it is not yet). Until then, start it from the open Blender with
+  `subprocess.run([bpy.app.binary_path, "-b", ...])`: a new process, the open scene is untouched.
+- **Don't switch the PC's checkout.** `C:\NoahCode\LMOD` is on whatever branch the other skin
+  needs. Put the copies you run in `work\<skin>\scripts\` (ignored), with the shared scripts
+  they import, and commit from git elsewhere (the cloud clone, or a `git worktree`).
+- **`previews` is shared.** Pull with rebase before pushing, never force-push, and prefix every
+  picture with the skin name.
+- **One mod per champion in game.** Two mods that replace the same base skin conflict, so only
+  one Kog'Maw skin can be enabled in LTK Manager at a time.
 
 ## One-time setup (already done on Noah's PC)
 
@@ -45,6 +65,8 @@ C:\NoahCode\LMOD\                  (this repo, public)
   scripts\<skin>.py                one recipe per skin (mossmaw.py)
   base\<champion>\                 IGNORED. Riot files pulled from the game, read-only
   work\<skin>\                     IGNORED. .blend working files, vN copies, exports
+  work\<skin>\scripts\             IGNORED. the copies a headless run uses (see "Two skins at once")
+  work\<skin>\previews\            IGNORED. renders and the audit report, before they go to `previews`
   mods\<skin>\                     IGNORED. Packaged .fantome / .modpkg
 
 C:\NoahCode\LMOD_previews\         git worktree on the orphan `previews` branch
@@ -83,7 +105,8 @@ its picture.
 - Never write into the League folder. Never run anything while the game is open.
 - CommunityDragon has meshes and textures but not skeletons or animations, so use the game files.
 - **Done when:** `base\<champion>\<champion>_rigged.blend` plays the run animation with the
-  right texture. (Aventurine imports flip the UVs correctly. A raw `.obj` import needed a V flip.)
+  right texture. That file holds only the run; recipes import the other `.anm` files
+  (idle, attack, main spell) with Aventurine before the audit (`pianomaw.load_actions`). (Aventurine imports flip the UVs correctly. A raw `.obj` import needed a V flip.)
 - **Picture:** a 6-frame run strip plus idle strip.
 
 ### 2. Write the brief
@@ -111,8 +134,17 @@ readability, silhouette at game zoom), and a triangle budget.
   influences per vertex, because the game uses the original `.skl`.
 - **Audit every piece on every frame** of run, idle, an attack and the main spell. Regrow
   any piece that stretches, comes off the skin, dips into the ground or clips into the body.
-- Keep the eyes and mouth clear. Check the silhouette at game zoom, not only close up.
-- **Picture:** hero 3/4 shot, run strip, and vN-1 vs vN side by side.
+- Keep the eyes and mouth clear. Check the silhouette at game zoom, not only close up: render
+  the standard game-camera shot (`pianomaw.render_game_view`), small and from above.
+- **Pieces that must hug the body** (a keyboard, plates, trim) can't be regrown elsewhere like
+  moss. Drape them with rays onto the rest-pose surface, smooth the bed over more than one
+  carapace band so they don't tilt into shingles, and give each piece one shared set of
+  weights from the skin under it. Per-vertex weights look right at rest but tear: Kog'Maw's
+  carapace squashes so much that Piano'Maw's keys stretched up to 7x. Measure how deep they
+  sink on the worst frame (`pianomaw.sink_audit`) instead of only counting clipped frames.
+- **The audit's "collar" must be a point on the skin**, moving with the piece's weights. A
+  point on a smoothed bed or a floating ornament reads as "came loose" on every frame.
+- **Picture:** hero 3/4 shot, run strip, game-zoom shot, and vN-1 vs vN side by side.
 
 ### 5. Polish passes (repeat)
 
@@ -155,8 +187,12 @@ This stage is being proven on Mossmaw right now. Update it with what worked.
 
 - Every result comes with a picture attached in the thread. A file path on Noah's PC is not a picture.
 - Picture names: `<skin>_v<N>_hero.jpg`, `<skin>_v<N>_run_strip.jpg`,
-  `<skin>_v<N>_turntable.jpg`, `<skin>_v<N-1>_v<N>.jpg`. JPEG, 1600 px wide at most, quality about 85.
+  `<skin>_v<N>_turntable.jpg`, `<skin>_v<N>_game.jpg`, `<skin>_v<N-1>_v<N>.jpg`, and
+  `<skin>_original_v<N>.jpg` (base Kog'Maw next to the skin). JPEG, quality about 85.
+  Strips may be wider than 1600 px; single shots should not be.
 - Same camera, light and frame between versions, so a comparison shows the change and nothing else.
+- Preview only what the game can show: no gloss, metal or live glow on added pieces. Paint
+  sheen and glow into colours (the export bakes material colours into the texture).
 
 ### When to ask Noah, and when to decide
 
@@ -190,11 +226,17 @@ Practice Tool again. If nothing changed, the old mod is fine.
   chat). Ask Noah to say it in the thread itself.
 - Aventurine 4.0.1 works on Blender 5.2, even though it was built for 4.x.
 - modelviewer.lol has no downloads and streams scrambled files. Use the game files.
+- A file copied to the PC from the project folder can arrive stale: the shared folder lags a few
+  seconds. Check the PC copy (size or a known line) before running it, or you render the old recipe.
+- Several of Kog'Maw's faces are flipped. Ray hits must flip a downward normal before testing
+  whether a surface faces up.
 
 ## Starting a new skin (checklist)
 
 1. Copy `docs/skins/_TEMPLATE.md` to `docs/skins/<skin>.md` and write the brief.
 2. Stage 1 for the champion if `base\<champion>\` doesn't exist yet. Record the champion's
    bone names in the skin card, because they differ per champion.
-3. Branch `<skin>` from `main`, and start `scripts/<skin>.py` from the closest existing recipe.
+3. Branch `<skin>` from `main`. Write `scripts/<skin>.py` and import the shared helpers
+   (skinning, audit, materials, renders) from `mossmaw.py` rather than copying them. Once
+   Mossmaw is merged, those helpers should move to one shared `scripts/skinlib.py`.
 4. Run stages 3 to 7 with a picture at every stage, then open a PR with the script and card.
