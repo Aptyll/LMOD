@@ -6,23 +6,26 @@ Run inside Blender with the rigged scene open (body mesh "KogMaw", armature "Kog
     spec = importlib.util.spec_from_file_location("mossmaw", r"...\\scripts\\mossmaw.py")
     mm = importlib.util.module_from_spec(spec); spec.loader.exec_module(mm)
     mm.apply_texture(SRC_PNG, DST_PNG)     # the "moss" recipe in recolor_texture.py
-    mm.build_moss()                        # everything in GROWTH, audited over the run
+    mm.build_moss()                        # everything in GROWTH, audited over ACTIONS
     mm.stage()                             # lights, ground, camera
-    mm.render_hero(OUT_JPG); mm.render_run_strip(OUT_JPG)
+    mm.render_hero(OUT_JPG); mm.render_run_strip(OUT_JPG); mm.render_turntable(OUT_JPG)
 
-Everything is seeded, so a rerun gives the same Mossmaw.
+Everything is seeded, so a rerun gives the same Mossmaw. The actions in ACTIONS must be in
+the file (Aventurine imports them from the .anm files); missing ones are skipped.
 
 GROWTH lists what grows and where: moss mats and cushions on his back, tail, skull top and
-shoulders; ferns, mushroom clusters (one glowing) and leaf sprouts among them; leaves out
-of the antenna tips; moss strands hanging from his jaw and antenna stalks; grass on his legs.
+shoulders (each picks a moss colour, and the hide under it darkens); ferns, leaf sprouts,
+mushroom clusters, two hero mushrooms and one glowing cluster (the mushroom kinds take spots
+the hero camera sees first); leaves out of the antenna tips; moss strands hanging from his
+jaw and antenna stalks; grass on his legs. Faces buried in his body are trimmed away.
 
 Skinning: moss mats and cushions take their bone weights from the body with a Data Transfer
 modifier (nearest face, interpolated), applied, then averaged over the piece so it moves as
-one with the hide under it, plus an Armature modifier. Everything else binds fully to the
-dominant bone under it, so it keeps its exact shape and swings with that bone.
+one with the hide under it, plus an Armature modifier. Everything else copies the weights
+of the one skin vertex it grows from, so its root stays on that spot of skin.
 
-build_moss audits every piece on every frame of the run and regrows any that stretch, come
-loose from the hide or dip into the ground.
+build_moss audits every piece on every frame of every action and regrows any that stretch,
+come loose from the skin, dip into the ground, or brush into him on more than a few frames.
 """
 import importlib.util
 import math
@@ -162,7 +165,11 @@ def _pick(cands, gap, rng):
 # ------ meshes
 
 
-def _material(name, base, dark, noise_scale=40.0, rough=1.0, glow=None):
+def _material(name, base, dark, noise_scale=40.0, rough=1.0, glow=None, variants=None, fuzz=0.0,
+              bump=0.0):
+    """A noise-mottled material. variants: colours one of which each object picks at random
+    (Object Info > Random), replacing base. fuzz: sheen that lights the rim like fine moss
+    hairs. bump: strength of a fine noise bump. glow: ((r, g, b), strength) emission."""
     import bpy
     mat = bpy.data.materials.get(name) or bpy.data.materials.new(name)
     mat.use_nodes = True
@@ -177,8 +184,42 @@ def _material(name, base, dark, noise_scale=40.0, rough=1.0, glow=None):
     ramp.color_ramp.elements[0].color = (*dark, 1)
     ramp.color_ramp.elements[1].color = (*base, 1)
     nt.links.new(noise.outputs["Fac"], ramp.inputs["Fac"])
-    nt.links.new(ramp.outputs["Color"], bsdf.inputs["Base Color"])
+    color = ramp.outputs["Color"]
+    if variants:
+        info = nt.nodes.new("ShaderNodeObjectInfo")
+        pick = nt.nodes.new("ShaderNodeValToRGB")
+        pick.color_ramp.interpolation = 'CONSTANT'
+        els = pick.color_ramp.elements
+        while len(els) < len(variants):
+            els.new(0.5)
+        for i, c in enumerate(variants):
+            els[i].position = i / len(variants)
+            els[i].color = (*c, 1)
+        nt.links.new(info.outputs["Random"], pick.inputs["Fac"])
+        mix = nt.nodes.new("ShaderNodeMix")
+        mix.data_type = 'RGBA'
+        mix.blend_type = 'MULTIPLY'
+        mix.inputs["Factor"].default_value = 1.0
+        ramp.color_ramp.elements[0].color = (0.45, 0.45, 0.45, 1)   # noise now only shades
+        ramp.color_ramp.elements[1].color = (1.1, 1.1, 1.1, 1)
+        nt.links.new(pick.outputs["Color"], mix.inputs["A"])
+        nt.links.new(ramp.outputs["Color"], mix.inputs["B"])
+        color = mix.outputs["Result"]
+    nt.links.new(color, bsdf.inputs["Base Color"])
     bsdf.inputs["Roughness"].default_value = rough
+    if fuzz:
+        bsdf.inputs["Sheen Weight"].default_value = fuzz
+        bsdf.inputs["Sheen Tint"].default_value = (0.45, 0.7, 0.25, 1)
+        bsdf.inputs["Sheen Roughness"].default_value = 0.6
+    if bump:
+        fine = nt.nodes.new("ShaderNodeTexNoise")
+        fine.inputs["Scale"].default_value = noise_scale * 4
+        fine.inputs["Detail"].default_value = 8.0
+        bn = nt.nodes.new("ShaderNodeBump")
+        bn.inputs["Strength"].default_value = bump
+        bn.inputs["Distance"].default_value = 0.02
+        nt.links.new(fine.outputs["Fac"], bn.inputs["Height"])
+        nt.links.new(bn.outputs["Normal"], bsdf.inputs["Normal"])
     if glow:
         bsdf.inputs["Emission Color"].default_value = (*glow[0], 1)
         bsdf.inputs["Emission Strength"].default_value = glow[1]
@@ -186,22 +227,12 @@ def _material(name, base, dark, noise_scale=40.0, rough=1.0, glow=None):
     return mat
 
 
-def _new_obj(name, bm, anchor=None):
-    """Make the object. anchor is the local point that starts buried in the hide; the
-    audit checks the vertex nearest to it (default: the lowest vertex)."""
+def _new_obj(name, bm):
     import bpy
     me = bpy.data.meshes.new(name)
     bm.to_mesh(me)
     bm.free()
-    ob = bpy.data.objects.new(name, me)
-    vs = me.vertices
-    if anchor is None:
-        ob["anchor"] = min(range(len(vs)), key=lambda i: vs[i].co.z)
-    else:
-        import mathutils
-        a = mathutils.Vector(anchor)
-        ob["anchor"] = min(range(len(vs)), key=lambda i: (vs[i].co - a).length)
-    return ob
+    return bpy.data.objects.new(name, me)
 
 
 def _clump(name, radius, flat, rng):
@@ -226,36 +257,81 @@ def _clump(name, radius, flat, rng):
 ROOT = -0.06   # stalks, strands and blades start this deep in the hide
 
 
-def _add_mushroom(bm, at, height, cap_r):
-    """One mushroom into bm, standing at local point at. Returns the cap's faces."""
-    import bmesh
+STEM, CAP, GILLS, SPOTS = range(4)   # mushroom material slots
+
+
+def _add_mushroom(bm, at, height, cap_r, lean, rng, spots=0):
+    """One mushroom into bm, its foot at local point at: a curved five-sided stem, a domed
+    cap with a curled rim, gills underneath, and optional raised spots on the cap.
+    lean is the (x, y) the stem bends toward. Faces carry their material slot."""
     import mathutils
-    base = at.z + ROOT
-    bmesh.ops.create_cone(bm, cap_ends=True, segments=7, radius1=cap_r * 0.32, radius2=cap_r * 0.22,
-                          depth=height, matrix=mathutils.Matrix.Translation((at.x, at.y, base + height / 2)))
-    top = base + height
-    cap = bmesh.ops.create_uvsphere(bm, u_segments=9, v_segments=5, radius=cap_r,
-                                    matrix=mathutils.Matrix.Translation((at.x, at.y, top)))
-    for v in cap["verts"]:
-        dz = v.co.z - top
-        v.co.z = top + (dz * 0.6 if dz > 0 else dz * 0.12)
-    return {f for v in cap["verts"] for f in v.link_faces}
+    sides, cap_seg = 5, 8
+
+    def ring(c, r, n, z_off=0.0, twist=0.0):
+        return [bm.verts.new(c + mathutils.Vector((math.cos(twist + 2 * math.pi * i / n) * r,
+                                                   math.sin(twist + 2 * math.pi * i / n) * r, z_off)))
+                for i in range(n)]
+
+    def band(a, b, slot):
+        n = len(a)
+        for i in range(n):
+            f = bm.faces.new((a[i], a[(i + 1) % n], b[(i + 1) % n], b[i]))
+            f.material_index = slot
+            f.smooth = True
+
+    bend = mathutils.Vector((lean[0], lean[1], 0))
+    stem_r = cap_r * 0.26
+    rings, centres = [], []
+    for k in range(4):           # foot, two bends, neck
+        t = k / 3
+        c = mathutils.Vector((at.x, at.y, at.z + ROOT + height * t)) + bend * height * t * t
+        r = stem_r * (1.35 if k == 0 else 1.0 - 0.2 * t)   # a little bulb at the foot
+        rings.append(ring(c, r, sides))
+        centres.append(c)
+    for a, b in zip(rings, rings[1:]):
+        band(a, b, STEM)
+    top = centres[-1]
+    # cap: rim (curled down) -> shoulder -> crown -> top
+    profile = [(1.0, -0.18), (1.02, 0.05), (0.82, 0.38), (0.45, 0.62)]
+    cap_rings = [ring(top, cap_r * rr, cap_seg, cap_r * zz, twist=0.3) for rr, zz in profile]
+    for a, b in zip(cap_rings, cap_rings[1:]):
+        band(a, b, CAP)
+    tip = bm.verts.new(top + mathutils.Vector((0, 0, cap_r * 0.7)))
+    for i in range(cap_seg):
+        f = bm.faces.new((cap_rings[-1][i], cap_rings[-1][(i + 1) % cap_seg], tip))
+        f.material_index = CAP
+        f.smooth = True
+    # gills: from the rim in to the neck, a shallow cone under the cap
+    inner = ring(top, stem_r * 0.9, cap_seg, cap_r * 0.02, twist=0.3)
+    for i in range(cap_seg):
+        f = bm.faces.new((cap_rings[0][(i + 1) % cap_seg], cap_rings[0][i], inner[i], inner[(i + 1) % cap_seg]))
+        f.material_index = GILLS
+    for _ in range(spots):       # small raised dots on the crown
+        a, d = rng.uniform(0, 2 * math.pi), rng.uniform(0.25, 0.75)
+        p = top + mathutils.Vector((math.cos(a) * cap_r * d, math.sin(a) * cap_r * d, cap_r * (0.65 - 0.4 * d * d)))
+        s = cap_r * rng.uniform(0.1, 0.16)
+        dot = [bm.verts.new(p + mathutils.Vector(o) * s) for o in ((1, 0, 0), (-0.5, 0.87, 0), (-0.5, -0.87, 0))]
+        peak = bm.verts.new(p + mathutils.Vector((0, 0, s * 0.8)))
+        for i in range(3):
+            f = bm.faces.new((dot[i], dot[(i + 1) % 3], peak))
+            f.material_index = SPOTS
 
 
-def _mushrooms(name, rng, count):
-    """A cluster of mixed-size mushrooms; the first is the tallest."""
+def _mushrooms(name, rng, count, size=1.0, spots=0):
+    """A cluster of mixed-size mushrooms leaning out from a shared root; the first is the
+    tallest. size scales the whole cluster (hero mushrooms use about 1.8)."""
     import bmesh
     import mathutils
     bm = bmesh.new()
-    caps = set()
     for k in range(count):
+        ang = k * 2.4 + rng.uniform(-0.3, 0.3)
         at = mathutils.Vector((0, 0, 0)) if k == 0 else mathutils.Vector(
-            (math.cos(k * 2.4), math.sin(k * 2.4), 0)) * rng.uniform(0.05, 0.09)
-        scale = 1.0 if k == 0 else rng.uniform(0.45, 0.8)
-        caps |= _add_mushroom(bm, at, rng.uniform(0.17, 0.24) * scale, rng.uniform(0.08, 0.11) * scale)
-    for f in bm.faces:
-        f.material_index = 1 if f in caps else 0
-    return _new_obj(name, bm, anchor=(0, 0, ROOT))
+            (math.cos(ang), math.sin(ang), 0)) * rng.uniform(0.06, 0.10) * size
+        scale = size * (1.0 if k == 0 else rng.uniform(0.4, 0.75))
+        lean = (0.0, 0.0) if k == 0 else (math.cos(ang) * 0.35, math.sin(ang) * 0.35)
+        _add_mushroom(bm, at, rng.uniform(0.20, 0.26) * scale, rng.uniform(0.09, 0.12) * scale, lean, rng,
+                      spots=spots if k < 2 else 0)
+    return _new_obj(name, bm)
 
 
 def _fern(name, size, rng):
@@ -282,25 +358,25 @@ def _fern(name, size, rng):
         for k in range(segs):   # a folded frond: two strips meeting on a raised midrib
             bm.faces.new((left[k], mid[k], mid[k + 1], left[k + 1]))
             bm.faces.new((mid[k], right[k], right[k + 1], mid[k + 1]))
-    return _new_obj(name, bm, anchor=(0, 0, ROOT))
+    return _new_obj(name, bm)
 
 
-def _strand(name, length, rng):
-    """Hanging moss: a bundle of two or three wavy, tapering three-sided strands along
-    local +Z (pointed at the ground), sharing one root."""
+def _strand(name, length, rng, thick=0.03, bundle=(2, 3)):
+    """Hanging moss: a bundle of wavy, tapering three-sided strands along local +Z
+    (pointed at the ground), sharing one root. thick is the root radius."""
     import bmesh
     import mathutils
     bm = bmesh.new()
-    for s in range(rng.randint(2, 3)):
+    for s in range(rng.randint(*bundle)):
         ln = length * (1.0 if s == 0 else rng.uniform(0.55, 0.85))
         spread = mathutils.Vector((math.cos(s * 2.3), math.sin(s * 2.3), 0)) * (0 if s == 0 else 0.03)
         phase, amp = rng.uniform(0, 6.28), rng.uniform(0.015, 0.03)
-        segs, rings = 6, []
+        segs, rings = 5, []
         for k in range(segs + 1):
             t = k / segs
             wave = mathutils.Vector((math.sin(phase + t * 7) * amp * t, math.cos(phase + t * 5) * amp * t, 0))
             c = mathutils.Vector((0, 0, ROOT + (ln - ROOT) * t)) + spread * t + wave
-            r = 0.03 * (1 - t) ** 0.7 + 0.005
+            r = thick * (1 - t) ** 0.7 + 0.005
             rings.append([bm.verts.new(c + mathutils.Vector((math.cos(a) * r, math.sin(a) * r, 0)))
                           for a in (0, 2.094, 4.189)])
         for k in range(segs):
@@ -311,7 +387,7 @@ def _strand(name, length, rng):
             bm.faces.new((rings[-1][j], rings[-1][(j + 1) % 3], end))
     for f in bm.faces:
         f.smooth = True
-    return _new_obj(name, bm, anchor=(0, 0, ROOT))
+    return _new_obj(name, bm)
 
 
 def _leaves(name, size, rng, count):
@@ -328,7 +404,7 @@ def _leaves(name, size, rng, count):
         mid = bm.verts.new(rot @ tilt @ mathutils.Vector((0, w * 0.25, ln * 0.45)))
         bm.faces.new((root, a, tip, mid))
         bm.faces.new((root, mid, tip, b))
-    return _new_obj(name, bm, anchor=(0, 0, ROOT))
+    return _new_obj(name, bm)
 
 
 def _tuft(name, size, rng):
@@ -345,10 +421,28 @@ def _tuft(name, size, rng):
         b = bm.verts.new(rot @ mathutils.Vector((0, -w, ROOT)))
         c = bm.verts.new(rot @ tip)
         bm.faces.new((a, b, c))
-    return _new_obj(name, bm, anchor=(0, 0, ROOT))
+    return _new_obj(name, bm)
 
 
 # ------ skinning
+
+
+def _trim_buried(ob, tree):
+    """Delete the faces of ob that sit wholly inside the body (rest pose): nobody sees them.
+    A vertex only counts as inside when it is also a little below the skin, so a misread
+    on an open part of his mesh never eats a visible face."""
+    import bmesh
+    mw = ob.matrix_world
+    bm = bmesh.new()
+    bm.from_mesh(ob.data)
+    inside = {v: _inside(tree, mw @ v.co) and tree.find_nearest(mw @ v.co)[3] > 0.01 for v in bm.verts}
+    dead = [f for f in bm.faces if all(inside[v] for v in f.verts)]
+    if len(dead) < len(bm.faces):
+        bmesh.ops.delete(bm, geom=dead, context='FACES_ONLY')
+        bmesh.ops.delete(bm, geom=[v for v in bm.verts if not v.link_faces], context='VERTS')
+    bm.to_mesh(ob.data)
+    bm.free()
+    return len(dead)
 
 
 def _orient(ob, rig, pos, normal, rng):
@@ -361,10 +455,14 @@ def _orient(ob, rig, pos, normal, rng):
 
 
 def _skin_rigid(ob, body, rig, vert_index):
-    """Bind every vertex fully to the dominant bone of the body vertex it grows from.
-    One bone means no blending, so the piece keeps its exact shape and swings with it."""
-    name = _dominant_bone(body, body.data.vertices[vert_index])
-    ob.vertex_groups.new(name=name).add([v.index for v in ob.data.vertices], 1.0, 'REPLACE')
+    """Give every vertex the weights of the one body vertex the piece grows from (its four
+    strongest bones). The whole piece then moves like that spot of skin: its root stays put
+    and it swings with the bones under it. The audit's stretch check catches any shear."""
+    src = sorted(body.data.vertices[vert_index].groups, key=lambda g: -g.weight)[:4]
+    total = sum(g.weight for g in src) or 1.0
+    idx = [v.index for v in ob.data.vertices]
+    for g in src:
+        ob.vertex_groups.new(name=body.vertex_groups[g.group].name).add(idx, g.weight / total, 'REPLACE')
     ob.modifiers.new("Armature", 'ARMATURE').object = rig
 
 
@@ -404,8 +502,10 @@ def _skin_transfer(ob, body, rig):
 # ------ audit
 
 STRETCH_MAX = 1.12          # a piece may stretch or squash this much during the action, no more
-TOUCH = 0.025               # a root this close to the surface still counts as attached (thin antennae)
+TOUCH = 0.025               # a piece's collar must stay this close to his surface
 FLOOR = -0.01               # no vertex may dip below the ground
+CLIP_DEPTH = 0.02           # a strand, stalk or blade tip sunk deeper than this into him is clipping
+CLIP_FRAMES = 3             # a piece may brush into him on this many frames, over all actions
 
 
 def _inside(tree, p):
@@ -421,71 +521,225 @@ def _inside(tree, p):
     return hits % 2 == 1
 
 
-def audit(pieces, action="kogmaw_run"):
-    """Play the action and return {name: (worst stretch, frames it fails)}. A frame fails
-    when the piece's buried root has come out of the hide, or the piece dips into the
-    ground. Stretch compares every edge to its rest length."""
+ACTIONS = ("kogmaw_run", "kogmaw_idle1", "kogmaw_attack1", "kogmaw_spell4")   # every one is audited
+
+
+def audit(pieces, actions=ACTIONS):
+    """Play each action and return {name: (worst stretch, hard fails, clip frames)}.
+    A hard fail is a frame where the skin point the piece grew from (its "collar") has
+    drifted more than TOUCH off his surface, or the piece dips into the ground. A clip frame is one where (for pieces with a "clip_z") a
+    vertex above clip_z has sunk into his body. Stretch compares every edge to its rest
+    length. Actions missing from the file are skipped."""
     import bpy
+    import mathutils
     from mathutils.bvhtree import BVHTree
     s = bpy.context.scene
     body = bpy.data.objects[BODY]
-    act = _set_action(action)
-    keep = s.frame_current
+    rig = bpy.data.objects[RIG]
+    keep_frame, keep_act = s.frame_current, rig.animation_data.action if rig.animation_data else None
     edges = {o.name: [e.vertices[:] for e in o.data.edges] for o in pieces}
     rest = {o.name: [(o.data.vertices[a].co - o.data.vertices[b].co).length for a, b in edges[o.name]]
             for o in pieces}
-    worst = {o.name: [1.0, 0] for o in pieces}
-    f0, f1 = (int(x) for x in act.frame_range)
-    for f in range(f0, f1 + 1):
-        s.frame_set(f)
-        dg = bpy.context.evaluated_depsgraph_get()
-        be = body.evaluated_get(dg)
-        bm = be.to_mesh()
-        tree = BVHTree.FromPolygons([be.matrix_world @ v.co for v in bm.vertices],
-                                    [p.vertices[:] for p in bm.polygons])
-        be.to_mesh_clear()
-        for o in pieces:
-            e = o.evaluated_get(dg)
-            me = e.to_mesh()
-            w = worst[o.name]
-            for (a, b), r0 in zip(edges[o.name], rest[o.name]):
-                ln = (me.vertices[a].co - me.vertices[b].co).length
-                w[0] = max(w[0], ln / max(r0, 1e-6), r0 / max(ln, 1e-6))
-            root = e.matrix_world @ me.vertices[o["anchor"]].co
-            attached = _inside(tree, root) or tree.find_nearest(root)[3] < TOUCH
-            low = min((e.matrix_world @ v.co).z for v in me.vertices)
-            if not attached or low < FLOOR:
-                w[1] += 1
-            e.to_mesh_clear()
-    s.frame_set(keep)
-    return {k: (round(a, 3), b) for k, (a, b) in worst.items()}
+    tips = {o.name: [v.index for v in o.data.vertices if "clip_z" in o and v.co.z > o["clip_z"]] for o in pieces}
+    # every vertex of a piece shares one set of bone weights, so one blended bone matrix
+    # moves the skin point the piece grew from (its "collar") exactly as the piece moves
+    weights = {o.name: [(o.vertex_groups[g.group].name, g.weight) for g in o.data.vertices[0].groups]
+               for o in pieces}
+    rmw, rmw_inv = rig.matrix_world, rig.matrix_world.inverted()
+    worst = {o.name: [1.0, 0, 0] for o in pieces}
+    for action in actions:
+        if action not in bpy.data.actions:
+            continue
+        act = _set_action(action)
+        f0, f1 = (int(x) for x in act.frame_range)
+        for f in range(f0, f1 + 1):
+            s.frame_set(f)
+            dg = bpy.context.evaluated_depsgraph_get()
+            be = body.evaluated_get(dg)
+            bm = be.to_mesh()
+            tree = BVHTree.FromPolygons([be.matrix_world @ v.co for v in bm.vertices],
+                                        [p.vertices[:] for p in bm.polygons])
+            be.to_mesh_clear()
+            for o in pieces:
+                e = o.evaluated_get(dg)
+                me = e.to_mesh()
+                mw = e.matrix_world
+                w = worst[o.name]
+                for (a, b), r0 in zip(edges[o.name], rest[o.name]):
+                    ln = (me.vertices[a].co - me.vertices[b].co).length
+                    w[0] = max(w[0], ln / max(r0, 1e-6), r0 / max(ln, 1e-6))
+                collar = None
+                if weights[o.name]:
+                    skin = mathutils.Matrix.Diagonal((0, 0, 0, 0))
+                    for b, wt in weights[o.name]:
+                        skin = skin + (rmw @ rig.pose.bones[b].matrix @ rig.data.bones[b].matrix_local.inverted()
+                                       @ rmw_inv) * wt
+                    collar = skin @ mathutils.Vector(o["collar"])
+                attached = collar is not None and tree.find_nearest(collar)[3] < TOUCH
+                low = min((mw @ v.co).z for v in me.vertices)
+                depth = o.get("clip_depth", CLIP_DEPTH)
+                clipped = any(_inside(tree, mw @ me.vertices[i].co) and
+                              tree.find_nearest(mw @ me.vertices[i].co)[3] > depth for i in tips[o.name])
+                if not attached or low < FLOOR:
+                    w[1] += 1
+                elif clipped:
+                    w[2] += 1
+                e.to_mesh_clear()
+    if keep_act:
+        _set_action(keep_act.name)
+    s.frame_set(keep_frame)
+    return {k: (round(a, 3), b, c) for k, (a, b, c) in worst.items()}
+
+
+def failing(report):
+    """Names the audit rejects: too much stretch, ever loose or in the ground, or brushing
+    into him on more than CLIP_FRAMES frames."""
+    return {k for k, (st, hard, clip) in report.items() if st > STRETCH_MAX or hard or clip > CLIP_FRAMES}
 
 
 # ------ growth
 
 # kind: (how many, spot finder, gap between spots of this kind in metres)
 GROWTH = {
-    "mat":      (36, "top", 0.13),    # big layered cushions that change his silhouette
-    "cushion":  (34, "top", 0.09),    # small ones filling between and over the mats
-    "fern":     (6, "top", 0.35),
-    "mushrooms": (6, "top", 0.3),     # clusters of 3-5; the first one glows
-    "sprout":   (8, "top", 0.25),     # leaves between his back spikes
-    "tip":      (4, "tips", 0.0),     # leaves out of each antenna tip
-    "beard":    (14, "jaw", 0.08),    # moss hanging from his jaw and chin
-    "drape":    (6, "antenna", 0.15), # moss hanging from his antenna stalks
-    "tuft":     (16, "legs", 0.1),    # grass along his legs and on his feet
+    "mat":       (30, "top", 0.14),     # big layered cushions that change his silhouette
+    "cushion":   (12, "top", 0.10),     # small ones filling between and over the mats
+    "fern":      (6, "top", 0.35),
+    "glow":      (1, "top", 0.0),       # one glowing cluster, first pick of the in-view spots
+    "hero":      (2, "top", 0.0),       # two big mushrooms, also where the hero camera sees them
+    "mushrooms": (5, "top", 0.3),       # clusters of 3-5
+    "sprout":    (8, "top", 0.25),      # leaves between his back spikes
+    "tip":       (4, "tips", 0.0),      # leaves out of each antenna tip
+    "beard":     (16, "jaw", 0.07),     # moss hanging from his jaw and chin; a few long ones
+    "drape":     (6, "antenna", 0.15),  # moss hanging from his antenna stalks
+    "tuft":      (14, "legs", 0.1),     # grass along his legs and on his feet
 }
-MAT_SIZE, MAT_FLAT, MAT_SINK = (0.11, 0.24), 0.7, 0.3
-CUSHION_SIZE, CUSHION_FLAT, CUSHION_SINK = (0.05, 0.1), 0.65, 0.35
+IN_VIEW = ("glow", "hero", "mushrooms")   # mushroom kinds share one pool: in-view spots first
+ANTENNA_ROOTS = ("R_Hair", "L_Hair", "R_Hair_c", "L_Hair_c")
+ANTENNA_CLEAR = 0.4         # metres kept clear around the antenna roots for in-view pieces
+VIEW_GAP = 0.3              # metres between hero mushrooms and the glow cluster
+CAP_HEIGHT = 0.18           # where a cap sits above its spot, for the visibility test
+HERO_ACTION, HERO_FRAME = "kogmaw_run", 6   # the pose of the hero shot
+MAT_SIZE, MAT_FLAT, MAT_SINK = (0.12, 0.25), 0.7, 0.3
+CUSHION_SIZE, CUSHION_FLAT, CUSHION_SINK = (0.06, 0.11), 0.65, 0.35
 UPRIGHT = 2.0               # how hard stalks lean from the surface normal toward up
+LONG_BEARDS = 4             # this many jaw strands hang long
+BEARD_CLEARANCE = 0.45      # a jaw strand ends at least this high off the ground (rest pose)
+STRAND_CLIP = 0.04          # strands may brush this deep into him before it counts as clipping
+MOSS_COLORS = ((0.11, 0.20, 0.035),   # moss green
+               (0.17, 0.25, 0.04),    # yellow-green new growth
+               (0.10, 0.13, 0.04),    # olive
+               (0.045, 0.085, 0.02),  # dark wet moss
+               (0.13, 0.22, 0.05))
+SHADE = 0.55                # how much the hide darkens right under a cushion
+GLOW = ((0.05, 1.0, 0.45), 6.0)   # green-cyan; kept deep, as bright emission washes out to white
 
 
-def build_moss(seed=SEED, action="kogmaw_run"):
-    """Grow moss, mushrooms, ferns, strands and grass on the rest pose, then audit every
-    piece over the action: any that stretches past STRETCH_MAX, comes loose or dips into
-    the ground on any frame is regrown on the next free spot. Reruns replace old growth."""
+def _in_view(body, cands, cam_loc):
+    """Spots the hero camera sees in the hero pose, best facing first: the spot's skin
+    faces the camera and nothing of his body (antennae included) blocks the line from a
+    point CAP_HEIGHT above the spot, where a mushroom cap would sit."""
+    import bpy
+    from mathutils.bvhtree import BVHTree
+    rig = body.parent
+    s = bpy.context.scene
+    keep_pose, keep_frame = rig.data.pose_position, s.frame_current
+    roots = [rig.matrix_world @ b.head_local for b in rig.data.bones if b.name in ANTENNA_ROOTS]
+    rig.data.pose_position = 'POSE'
+    _set_action(HERO_ACTION)
+    s.frame_set(HERO_FRAME)
+    dg = bpy.context.evaluated_depsgraph_get()
+    be = body.evaluated_get(dg)
+    em = be.to_mesh()
+    mw = be.matrix_world
+    pts = [mw @ v.co for v in em.vertices]
+    nrm = [(mw.to_3x3() @ v.normal).normalized() for v in em.vertices]
+    tree = BVHTree.FromPolygons(pts, [p.vertices[:] for p in em.polygons])
+    rest_n = [(body.matrix_world.to_3x3() @ v.normal).normalized() for v in body.data.vertices]
+    be.to_mesh_clear()
+    scored = []
+    for p, n, vi in cands:
+        if any((p - r).length < ANTENNA_CLEAR for r in roots):
+            continue   # his antennae sweep through anything big growing at their roots
+        pn = nrm[vi] if rest_n[vi].dot(n) >= 0 else -nrm[vi]   # follow the spot's facing
+        cap = pts[vi] + pn * CAP_HEIGHT
+        to_cam = (cam_loc - cap).normalized()
+        face = pn.dot(to_cam)
+        if face < 0.35:
+            continue
+        if tree.ray_cast(cap + to_cam * 0.02, to_cam)[0] is not None:
+            continue
+        scored.append((face, (p, n, vi)))
+    rig.data.pose_position = keep_pose
+    s.frame_set(keep_frame)
+    bpy.context.view_layer.update()
+    scored.sort(key=lambda s: -s[0])
+    return [c for _, c in scored]
+
+
+def shade_hide(body, clumps, strength=SHADE):
+    """Darken the hide under each cushion, so the moss sits in it, not on it: a colour
+    attribute on the body ("MossShade") multiplied into its texture. Rest-pose distances."""
+    me = body.data
+    attr = me.color_attributes.get("MossShade") or me.color_attributes.new("MossShade", 'FLOAT_COLOR', 'POINT')
+    mw = body.matrix_world
+    centres = [(o.matrix_world.translation.copy(), o["radius"]) for o in clumps]
+    for v in me.vertices:
+        p = mw @ v.co
+        dark = 0.0
+        for c, r in centres:
+            d = (p - c).length
+            if d < r * 1.7:
+                t = max(0.0, min(1.0, (r * 1.7 - d) / (r * 0.9)))
+                dark = max(dark, t * t * (3 - 2 * t))
+        k = 1.0 - strength * dark
+        attr.data[v.index].color = (k, k, k, 1.0)
+    for mat in me.materials:
+        nt = mat.node_tree
+        if "MossShade" in nt.nodes:
+            continue
+        tex = next(n for n in nt.nodes if n.type == 'TEX_IMAGE')
+        link = next(l for l in nt.links if l.from_node == tex and l.from_socket.name == "Color")
+        dst = link.to_socket
+        col = nt.nodes.new("ShaderNodeVertexColor")
+        col.name = "MossShade"
+        col.layer_name = "MossShade"
+        mix = nt.nodes.new("ShaderNodeMix")
+        mix.data_type = 'RGBA'
+        mix.blend_type = 'MULTIPLY'
+        mix.inputs["Factor"].default_value = 1.0
+        nt.links.remove(link)
+        nt.links.new(tex.outputs["Color"], mix.inputs["A"])
+        nt.links.new(col.outputs["Color"], mix.inputs["B"])
+        nt.links.new(mix.outputs["Result"], dst)
+
+
+def _glow_light(rig, ob, bone):
+    """A small light riding the glow cluster's bone, so its glow spills onto the moss."""
     import bpy
     import mathutils
+    name = "GlowLight"
+    old = bpy.data.objects.get(name)
+    if old:
+        bpy.data.objects.remove(old, do_unlink=True)
+    lt = bpy.data.lights.get(name) or bpy.data.lights.new(name, 'POINT')
+    lt.energy, lt.color, lt.shadow_soft_size = 6.0, GLOW[0], 0.05
+    lo = bpy.data.objects.new(name, lt)
+    ob.users_collection[0].objects.link(lo)
+    vs = ob.data.vertices
+    top = ob.matrix_world @ vs[max(range(len(vs)), key=lambda i: vs[i].co.z)].co
+    lo.parent, lo.parent_type, lo.parent_bone = rig, 'BONE', bone
+    bpy.context.view_layer.update()
+    lo.matrix_world = mathutils.Matrix.Translation(top + mathutils.Vector((0, 0, 0.08)))
+    return lo
+
+
+def build_moss(seed=SEED, actions=ACTIONS):
+    """Grow everything in GROWTH on the rest pose, then audit every piece over the actions:
+    any that stretches past STRETCH_MAX, comes loose, clips into him or dips into the
+    ground on any frame is regrown on the next free spot. Reruns replace old growth."""
+    import bpy
+    import mathutils
+    from mathutils.bvhtree import BVHTree
     body, rig = bpy.data.objects[BODY], bpy.data.objects[RIG]
     rng = random.Random(seed)
     coll = bpy.data.collections.get("Moss") or bpy.data.collections.new("Moss")
@@ -493,10 +747,10 @@ def build_moss(seed=SEED, action="kogmaw_run"):
         bpy.context.scene.collection.children.link(coll)
 
     def remove(o):
-        me = o.data
+        data = o.data
         bpy.data.objects.remove(o, do_unlink=True)
-        if me and me.users == 0:
-            bpy.data.meshes.remove(me)
+        if isinstance(data, bpy.types.Mesh) and data.users == 0:
+            bpy.data.meshes.remove(data)
 
     prefixes = tuple(k.capitalize() + "." for k in GROWTH) + ("MossClump.", "Mushroom.", "Fern.")
     stale = [o for o in bpy.data.objects if o.name.startswith(prefixes) and not o.users_collection]
@@ -504,21 +758,31 @@ def build_moss(seed=SEED, action="kogmaw_run"):
         remove(o)
 
     mats = {
-        "moss": _material("Moss", (0.085, 0.16, 0.03), (0.025, 0.06, 0.012), 45.0),
-        "moss_light": _material("MossLight", (0.15, 0.25, 0.05), (0.05, 0.10, 0.02), 50.0),
-        "hanging": _material("HangingMoss", (0.09, 0.14, 0.04), (0.03, 0.05, 0.015), 30.0),
+        "moss": _material("Moss", (0.1, 0.18, 0.03), (0.03, 0.06, 0.01), 45.0, variants=MOSS_COLORS,
+                          fuzz=0.25, bump=0.25),
+        "hanging": _material("HangingMoss", (0.09, 0.14, 0.04), (0.03, 0.05, 0.015), 30.0, fuzz=0.2),
         "leaf": _material("Leaf", (0.30, 0.55, 0.12), (0.12, 0.28, 0.05), 20.0, rough=0.7),
         "fern": _material("Fern", (0.30, 0.48, 0.11), (0.10, 0.22, 0.04), 25.0, rough=0.8),
-        "grass": _material("Grass", (0.16, 0.26, 0.05), (0.06, 0.11, 0.02), 30.0),
-        "stem": _material("MushroomStem", (0.78, 0.74, 0.60), (0.50, 0.46, 0.34), 60.0),
-        "cap": _material("MushroomCap", (0.85, 0.40, 0.10), (0.42, 0.14, 0.04), 20.0, rough=0.6),
-        "glow": _material("GlowCap", (0.25, 0.55, 0.35), (0.12, 0.35, 0.22), 20.0, rough=0.5,
-                          glow=((0.35, 1.0, 0.55), 1.2)),
+        "grass": _material("Grass", (0.16, 0.26, 0.05), (0.06, 0.11, 0.02), 30.0, fuzz=0.15),
+        "stem": _material("MushroomStem", (0.80, 0.76, 0.62), (0.52, 0.47, 0.35), 60.0),
+        "cap": _material("MushroomCap", (0.80, 0.36, 0.09), (0.40, 0.13, 0.04), 18.0, rough=0.55,
+                         variants=((0.80, 0.36, 0.09), (0.65, 0.25, 0.07), (0.85, 0.50, 0.16))),
+        "gills": _material("MushroomGills", (0.62, 0.52, 0.38), (0.36, 0.28, 0.18), 120.0),
+        "dots": _material("MushroomSpots", (0.92, 0.88, 0.74), (0.75, 0.70, 0.56), 40.0),
+        "glow_cap": _material("GlowCap", (0.012, 0.05, 0.04), (0.004, 0.02, 0.016), 18.0, rough=0.5,
+                              glow=(GLOW[0], 0.15)),   # dark cap: the spots and gills carry the glow
+        "glow_spot": _material("GlowSpot", (0.2, 0.9, 0.5), (0.1, 0.7, 0.4), 20.0,
+                               glow=((0.3, 1.0, 0.6), 6.0)),
+        "glow_gills": _material("GlowGills", (0.05, 0.30, 0.20), (0.03, 0.18, 0.12), 120.0,
+                                glow=(GLOW[0], 3.0)),
     }
 
     old_pose = rig.data.pose_position
     rig.data.pose_position = 'REST'
     bpy.context.view_layer.update()
+    me = body.data
+    rest_tree = BVHTree.FromPolygons([body.matrix_world @ v.co for v in me.vertices],
+                                     [p.vertices[:] for p in me.polygons])
     finders = {
         "top": lambda: _ray_spots(body, TOP_BONES),
         "legs": lambda: _ray_spots(body, LEG_BONES, min_thick=0.08),
@@ -527,31 +791,58 @@ def build_moss(seed=SEED, action="kogmaw_run"):
         "tips": lambda: _antenna_spots(body, rig, ANTENNA_TIPS, tips=True),
     }
     cands = {k: f() for k, f in finders.items()}
-    spots = {kind: _pick(cands[where], gap, rng) for kind, (n, where, gap) in GROWTH.items()}
-    up = mathutils.Vector((0, 0, UPRIGHT))
+    cam = mathutils.Vector(HERO_CAM[0])
+    def view_pool(where):
+        """In-view spots first (best facing first), then any other spot, all VIEW_GAP apart.
+        Heroes and the glow cluster draw from this one pool, so they never share a spot."""
+        rest = list(cands[where])
+        rng.shuffle(rest)
+        taken = []
+        for c in _in_view(body, cands[where], cam) + rest:
+            if all((c[0] - t).length >= VIEW_GAP for t in taken):
+                taken.append(c[0])
+                yield c
 
-    def grow(kind, name, first):
+    spots = {}
+    shared = view_pool("top")
+    for kind, (n, where, gap) in GROWTH.items():
+        spots[kind] = shared if kind in IN_VIEW else _pick(cands[where], gap, rng)
+    up = mathutils.Vector((0, 0, UPRIGHT))
+    beards = [0]
+
+    def grow(kind, name):
         try:
             pos, n, vi = next(spots[kind])
         except StopIteration:
             return None
-        rigid, at = True, pos
+        rigid, at, clip = True, pos, 0.03
         if kind in ("mat", "cushion"):
             size, flat, sink = ((MAT_SIZE, MAT_FLAT, MAT_SINK) if kind == "mat"
                                 else (CUSHION_SIZE, CUSHION_FLAT, CUSHION_SINK))
             r = rng.uniform(*size)
             ob = _clump(name, r, flat, rng)
-            ob.data.materials.append(mats["moss"] if kind == "mat" or rng.random() < 0.5 else mats["moss_light"])
-            at, rigid = pos - n * (r * flat * sink), False
+            ob.data.materials.append(mats["moss"])
+            ob["radius"] = r
+            at, rigid, clip = pos - n * (r * flat * sink), False, None
         elif kind == "fern":
             ob = _fern(name, rng.uniform(0.28, 0.42), rng)
             ob.data.materials.append(mats["fern"])
             n = (n + up).normalized()
-        elif kind == "mushrooms":
-            ob = _mushrooms(name, rng, rng.randint(3, 5))
-            ob.data.materials.append(mats["stem"])
-            ob.data.materials.append(mats["glow"] if first else mats["cap"])
+            clip = None   # fronds curl down onto the moss by design
+        elif kind in ("mushrooms", "hero", "glow"):
+            if kind == "hero":
+                ob = _mushrooms(name, rng, rng.randint(2, 3), size=1.55)
+            elif kind == "glow":
+                ob = _mushrooms(name, rng, rng.randint(4, 5), size=1.2, spots=5)
+            else:
+                ob = _mushrooms(name, rng, rng.randint(3, 5))
+            slots_ = (("stem", "glow_cap", "glow_gills", "glow_spot") if kind == "glow"
+                      else ("stem", "cap", "gills", "dots"))
+            for m in slots_:
+                ob.data.materials.append(mats[m])
             n = (n + up).normalized()
+            # side stems start in the curve of the hide by design; only caps may not sink in
+            clip = {"hero": 0.17, "glow": 0.14}.get(kind, 0.11)
         elif kind in ("sprout", "tip"):
             ob = _leaves(name, rng.uniform(0.10, 0.16) if kind == "sprout" else rng.uniform(0.12, 0.18),
                          rng, rng.randint(3, 4))
@@ -559,9 +850,22 @@ def build_moss(seed=SEED, action="kogmaw_run"):
             if kind == "sprout":
                 n = (n + up).normalized()
         elif kind in ("beard", "drape"):
-            ob = _strand(name, rng.uniform(0.16, 0.34) if kind == "beard" else rng.uniform(0.18, 0.30), rng)
+            if kind == "beard":
+                beards[0] += 1
+                long = beards[0] <= LONG_BEARDS
+                ln = rng.uniform(0.38, 0.5) if long else rng.uniform(0.12, 0.28)
+                ln = min(ln, pos.z - BEARD_CLEARANCE)   # his head dips low when he runs and spits
+                if ln < 0.1:
+                    return grow(kind, name)
+                ob = _strand(name, ln, rng,
+                             thick=rng.uniform(0.03, 0.042) if long else rng.uniform(0.016, 0.03),
+                             bundle=(1, 2) if long else (1, 3))
+            else:
+                ob = _strand(name, rng.uniform(0.18, 0.32), rng, thick=rng.uniform(0.014, 0.024), bundle=(1, 2))
             ob.data.materials.append(mats["hanging"])
             n = mathutils.Vector((0, 0, -1))
+            clip = 0.06
+            ob["clip_depth"] = STRAND_CLIP   # a soft strand brushing his chest is fine
         else:  # tuft
             ob = _tuft(name, rng.uniform(0.08, 0.14), rng)
             ob.data.materials.append(mats["grass"])
@@ -569,43 +873,53 @@ def build_moss(seed=SEED, action="kogmaw_run"):
         coll.objects.link(ob)
         _orient(ob, rig, at, n, rng)
         bpy.context.view_layer.update()
+        # the skin point it grows from; a tip sprout's spot is inside the tip, so use its vertex
+        ob["collar"] = list(body.matrix_world @ me.vertices[vi].co if kind == "tip" else pos)
+        if clip is not None:
+            ob["clip_z"] = clip
         if rigid:
             _skin_rigid(ob, body, rig, vi)
         else:
+            _trim_buried(ob, rest_tree)
             _skin_transfer(ob, body, rig)
         return ob
 
     slots = [(kind, "%s.%02d" % (kind.capitalize(), i)) for kind, (n, _, _) in GROWTH.items() for i in range(n)]
-    pieces = {name: grow(kind, name, name.endswith(".00")) for kind, name in slots}
+    pieces = {name: grow(kind, name) for kind, name in slots}
     regrown, rounds = 0, 0
     while True:
         live = [o for o in pieces.values() if o is not None]
         rig.data.pose_position = old_pose
-        report = audit(live, action)
+        report = audit(live, actions)
         rig.data.pose_position = 'REST'
         bpy.context.view_layer.update()
-        bad = {k for k, (st, fails) in report.items() if st > STRETCH_MAX or fails}
+        bad = failing(report)
         rounds += 1
-        if not bad or rounds > 8:
+        if not bad or rounds > 12:
             break
         for kind, name in slots:
             if pieces[name] is not None and pieces[name].name in bad:
                 remove(pieces[name])
-                pieces[name] = grow(kind, name, name.endswith(".00"))
+                pieces[name] = grow(kind, name)
                 regrown += 1
     for name, o in list(pieces.items()):   # anything still failing after the last round goes
         if o is not None and o.name in bad:
             remove(o)
             pieces[name] = None
 
+    placed = [o for o in pieces.values() if o]
+    shade_hide(body, [o for o in placed if "radius" in o])
+    glow = pieces.get("Glow.00")
+    if glow:
+        _glow_light(rig, glow, glow.vertex_groups[0].name)
     rig.data.pose_position = old_pose
     bpy.context.view_layer.update()
-    placed = [o for o in pieces.values() if o]
+    tris = sum(len(p.vertices) - 2 for o in placed for p in o.data.polygons)
     return {"placed": len(placed), "by_kind": {k: sum(1 for o in placed if o.name.startswith(k.capitalize() + "."))
                                                for k in GROWTH},
             "dropped": [k for k, o in pieces.items() if o is None], "regrown": regrown, "rounds": rounds,
             "worst_stretch": max((v[0] for k, v in report.items() if k not in bad), default=1.0),
-            "faces": sum(len(o.data.polygons) for o in placed)}
+            "triangles": tris}
 
 
 # ------ previews
@@ -696,7 +1010,7 @@ HERO_CAM = ((4.7, -5.9, 2.9), (0.0, -0.2, 1.3))
 STRIP_CAM = ((7.4, -3.4, 2.6), (0.0, 0.0, 1.2))
 
 
-def render_hero(out_jpg, frame=6, action="kogmaw_run", size=1200):
+def render_hero(out_jpg, frame=HERO_FRAME, action=HERO_ACTION, size=1200):
     """A 3/4 front shot from slightly above."""
     import bpy
     s = bpy.context.scene
@@ -719,5 +1033,26 @@ def render_run_strip(out_jpg, action="kogmaw_run", count=6, size=480):
     tiles = []
     for k in range(count):
         s.frame_set(int(round(f0 + (f1 - f0 + 1) * k / count)))
+        tiles.append(_render_rgba(tmp))
+    return _save_jpg(out_jpg, np.concatenate(tiles, axis=1))
+
+
+TURNTABLE = (("front", -90), ("side", 0), ("back", 90), ("3/4", -51.5))   # camera angle around Z, degrees
+
+
+def render_turntable(out_jpg, size=600, frame=HERO_FRAME, action=HERO_ACTION):
+    """The hero pose from front, side, back and 3/4, at the hero camera's distance and height."""
+    import bpy
+    s = bpy.context.scene
+    _set_action(action)
+    s.frame_set(frame)
+    s.render.resolution_x = s.render.resolution_y = size
+    (cx, cy, cz), target = HERO_CAM
+    dist = math.hypot(cx - target[0], cy - target[1])
+    tmp = os.path.splitext(out_jpg)[0] + "_tmp.png"
+    tiles = []
+    for _, deg in TURNTABLE:
+        a = math.radians(deg)
+        _aim(s.camera, (target[0] + dist * math.cos(a), target[1] + dist * math.sin(a), cz), target)
         tiles.append(_render_rgba(tmp))
     return _save_jpg(out_jpg, np.concatenate(tiles, axis=1))
