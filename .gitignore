@@ -1,0 +1,33 @@
+# Riot Games assets: never commit these. This repo is public, and extracted
+# game files belong to Riot. Keep them on your own machine only.
+*.skn
+*.skl
+*.anm
+*.scb
+*.sco
+*.tex
+*.dds
+*.wad
+*.wad.client
+*.bin
+*.fantome
+*.modpkg
+
+# Blender files embed the Riot mesh and texture, so they stay local too.
+*.blend
+*.blend1
+*.blend2
+
+# Extracted model folders and working copies
+base/
+work/
+
+# Renders and screenshots (share them in the project, not in git)
+renders/
+*_setup_shots/
+
+# OS and editor clutter
+.DS_Store
+Thumbs.db
+__pycache__/
+*.pyc
