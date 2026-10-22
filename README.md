@@ -18,8 +18,10 @@ Riot's game files. That means extracted meshes (`.skn`), skeletons (`.skl`), ani
 
 ## Workflow
 
-Never push to `main`. Work on a branch, open a pull request, resolve conflicts on the branch, then merge.
+How a skin gets made, for any champion: [docs/SKIN_WORKFLOW.md](docs/SKIN_WORKFLOW.md). Rules for Claude sessions: [CLAUDE.md](CLAUDE.md). One card per skin lives in [docs/skins/](docs/skins/).
+
+Never push to `main`. Work on a branch, open a pull request, rebase onto the latest `main` and resolve conflicts on the branch, then merge.
 
 ## Risk note
 
-Loading modded files into the game is against Riot's Terms of Service. The plan for now is preview only: the skin is built and viewed in Blender, not loaded into League.
+Loading modded files into the game is against Riot's Terms of Service. Noah uses his skins in game for personal, cosmetic use only and accepts that risk. Packaged mods stay on his PC (`mods/`, ignored by git). Skins are never sold and never unlock Riot's paid skins.
