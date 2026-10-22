@@ -12,6 +12,10 @@ The texture is split into three groups by HSV:
   bone   - low-saturation pixels plus warm beige ones (skull plates, claws)
 Each group gets its own hue target and saturation/value multipliers. The pixel's own
 value (brightness) always carries through, so painted shading and highlights survive.
+
+The "moss" variant (moss_pixels, tuned in MOSS) is procedural instead: layered moss greens
+with fuzzy noise on the hide, new-growth green spike tips, lichen-grey stone bone with dark
+moss in the crevices, a deep red mouth, and the eye left as painted.
 """
 import os
 import sys
@@ -103,12 +107,122 @@ def recolor_pixels(rgba, recipe):
     return result
 
 
+def value_noise(h, w, seed, octaves=(8, 32, 96), weights=(0.5, 0.3, 0.2)):
+    """Smooth fractal value noise in 0..1, shape (h, w). Seeded, so reruns match."""
+    rng = np.random.default_rng(seed)
+    out = np.zeros((h, w), dtype=np.float32)
+    for cells, wt in zip(octaves, weights):
+        grid = rng.random((cells + 1, cells + 1)).astype(np.float32)
+        ys = np.linspace(0, cells, h, endpoint=False)
+        xs = np.linspace(0, cells, w, endpoint=False)
+        y0, x0 = ys.astype(int), xs.astype(int)
+        fy, fx = (ys - y0)[:, None], (xs - x0)[None, :]
+        fy, fx = fy * fy * (3 - 2 * fy), fx * fx * (3 - 2 * fx)
+        a, b = grid[y0][:, x0], grid[y0][:, x0 + 1]
+        c, d = grid[y0 + 1][:, x0], grid[y0 + 1][:, x0 + 1]
+        out += wt * ((a * (1 - fx) + b * fx) * (1 - fy) + (c * (1 - fx) + d * fx) * fy)
+    return out / sum(weights)
+
+
+# The "moss" recipe is procedural (noise), so it lives in moss_pixels, not in RECIPES.
+MOSS = {
+    "seed": 7,
+    "hide_dark": (0.07, 0.13, 0.04),    # moss in shadow
+    "hide_mid": (0.20, 0.32, 0.08),     # forest moss
+    "hide_light": (0.42, 0.48, 0.16),   # olive, sunlit moss
+    "tip": (0.66, 0.80, 0.38),          # new-growth green on the bright cyan spikes
+    "tip_hue": (0.42, 0.58),            # cyan band that counts as spike tip...
+    "tip_val": 0.62,                    # ...when brighter than this
+    "stone": (0.40, 0.44, 0.37),        # weathered grey-green stone (bone)
+    "lichen": (0.58, 0.62, 0.36),       # pale lichen blotches on stone
+    "crevice": (0.08, 0.17, 0.04),      # dark moss packed into bone crevices
+    "crevice_val": 0.5,                 # bone darker than this (of its max) fills with moss
+    "body_band": (0.30, 0.80),          # blue/teal/purple hue counts as hide
+    "mouth_band": (0.80, 0.03),         # magenta..red hue (wraps through 0) counts as mouth
+    "mouth_hue": 0.985,                 # deep red flesh
+    "eye_sat": 0.6,                     # saturated orange is the eye and stays as painted...
+    "eye_val": 0.25,                    # ...when brighter than this
+    "clean": 2,                         # majority filter radius in pixels
+}
+
+
+def _box_sum(a, r):
+    """Sum of a over a (2r+1)^2 window, edges clamped."""
+    p = np.pad(a, r, mode="edge").cumsum(0).cumsum(1)
+    p = np.pad(p, ((1, 0), (1, 0)))
+    k = 2 * r + 1
+    return p[k:, k:] - p[:-k, k:] - p[k:, :-k] + p[:-k, :-k]
+
+
+def _majority(label, n, r):
+    if r <= 0:
+        return label
+    counts = np.stack([_box_sum((label == i).astype(np.float32), r) for i in range(n)])
+    return counts.argmax(0)
+
+
+def _ramp3(t, a, b, c):
+    t = t[..., None]
+    lo = np.array(a) + (np.array(b) - np.array(a)) * np.clip(t * 2, 0, 1)
+    return np.where(t < 0.5, lo, np.array(b) + (np.array(c) - np.array(b)) * np.clip(t * 2 - 1, 0, 1))
+
+
+def moss_pixels(rgba, m=MOSS):
+    """Mossy recolor. rgba: float (h, w, 4) in 0..1. The pixel's brightness drives every
+    colour, so the painted shading stays; noise only varies the hue of the moss."""
+    hp, wp = rgba.shape[:2]
+    rgb = rgba[..., :3]
+    h, s, v = np.moveaxis(rgb_to_hsv(rgb), -1, 0)
+    # label every pixel, then a majority filter removes stray single-pixel picks
+    magenta = ((h >= m["mouth_band"][0]) | (h <= m["mouth_band"][1])) & (s > 0.4)
+    eye = (h > 0.0) & (h <= BEIGE_HUE[1]) & (s > m["eye_sat"]) & (v > m["eye_val"])
+    cool = (h >= m["body_band"][0]) & (h <= m["body_band"][1]) & (s >= BONE_SAT)
+    label = np.where(eye, 3, np.where(magenta, 2, np.where(cool, 1, 0)))  # 0 bone 1 body 2 flesh 3 eye
+    label = _majority(label, 4, m["clean"])
+    bone, body, flesh, eye = (label == 0), (label == 1), (label == 2), (label == 3)
+    tip = body & (h >= m["tip_hue"][0]) & (h <= m["tip_hue"][1]) & (v > m["tip_val"])
+    hide = body & ~tip
+
+    big = value_noise(hp, wp, m["seed"])
+    fine = value_noise(hp, wp, m["seed"] + 1, octaves=(64, 180, 400), weights=(0.3, 0.4, 0.3))
+    blot = value_noise(hp, wp, m["seed"] + 2, octaves=(12, 40), weights=(0.6, 0.4))
+    fuzz = (0.82 + 0.36 * fine)[..., None]          # fuzzy moss grain
+
+    # hide: brightness picks dark -> mid -> light moss, big noise shifts the patches
+    vmax_body = max(float(v[body].max()) if body.any() else 1.0, 1e-3)
+    t = np.clip(v / vmax_body * 1.1 + (big - 0.5) * 0.6, 0, 1)
+    hide_rgb = _ramp3(t, m["hide_dark"], m["hide_mid"], m["hide_light"]) * fuzz
+    hide_rgb *= (0.6 + 0.6 * v / vmax_body)[..., None]
+
+    tip_rgb = np.array(m["tip"]) * (v / vmax_body)[..., None] * (0.9 + 0.2 * fine[..., None])
+
+    # bone: stone keeps the paint's value; lichen blotches; moss in the crevices
+    vmax_bone = max(float(v[bone].max()) if bone.any() else 1.0, 1e-3)
+    rel = v / vmax_bone
+    stone = np.array(m["stone"]) * (0.2 + 0.95 * rel)[..., None] * (0.9 + 0.2 * fine[..., None])
+    lichen = np.clip((blot - 0.62) * 6, 0, 1)[..., None] * 0.7
+    stone = stone * (1 - lichen) + np.array(m["lichen"]) * rel[..., None] * lichen
+    crev = np.clip((m["crevice_val"] - rel) / m["crevice_val"] * 1.8 + (big - 0.5), 0, 1)[..., None]
+    bone_rgb = stone * (1 - crev) + np.array(m["crevice"]) * fuzz * (0.6 + rel[..., None]) * crev
+
+    # mouth and gums: deep red
+    flesh_hsv = np.stack([np.full_like(h, m["mouth_hue"]), np.clip(s * 1.1, 0, 1), v * 0.9], -1)
+    flesh_rgb = hsv_to_rgb(flesh_hsv)
+
+    out = rgb.copy()
+    for mask, col in ((hide, hide_rgb), (tip, tip_rgb), (bone, bone_rgb), (flesh, flesh_rgb)):  # eye: as painted
+        out = np.where(mask[..., None], col, out)
+    result = rgba.copy()
+    result[..., :3] = np.clip(out, 0, 1)
+    return result
+
+
 def recolor(src, dst, recipe):
     import bpy
     img = bpy.data.images.load(src, check_existing=False)
     w, h = img.size
     px = np.array(img.pixels[:], dtype=np.float32).reshape(h, w, 4)
-    out = recolor_pixels(px, recipe)
+    out = moss_pixels(px) if recipe == "moss" else recolor_pixels(px, recipe)
     new = bpy.data.images.new(os.path.splitext(os.path.basename(dst))[0], w, h, alpha=True)
     new.pixels = out.ravel()
     new.filepath_raw = dst
@@ -126,9 +240,9 @@ def main(argv):
     src, out_dir, *names = args
     os.makedirs(out_dir, exist_ok=True)
     stem = os.path.splitext(os.path.basename(src))[0]
-    for name in names or list(RECIPES):
+    for name in names or list(RECIPES) + ["moss"]:
         dst = os.path.join(out_dir, "%s_%s.png" % (stem, name))
-        recolor(src, dst, RECIPES[name])
+        recolor(src, dst, "moss" if name == "moss" else RECIPES[name])
         print("wrote", dst)
 
 
