@@ -21,6 +21,7 @@
 # Extracted model folders and working copies
 base/
 work/
+mods/
 
 # Renders and screenshots (share them in the project, not in git)
 renders/
