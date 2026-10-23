@@ -230,6 +230,17 @@ Practice Tool again. If nothing changed, the old mod is fine.
   seconds. Check the PC copy (size or a known line) before running it, or you render the old recipe.
 - Several of Kog'Maw's faces are flipped. Ray hits must flip a downward normal before testing
   whether a surface faces up.
+- **Added pieces export inside-out unless you flip them.** Aventurine mirrors positions on
+  import and export but keeps triangle winding, so in Blender a champion's faces and normals
+  both point in (a culled render of the plain body shows his insides). A piece built the normal
+  Blender way comes out inside-out in game, and League culls back faces, so you see only its
+  inner side. This made Mossmaw 1.0's moss look see-through. Before joining a piece into the
+  export mesh, reverse its faces and let its normals follow. Build pieces as closed shells, and
+  don't trust `bmesh.ops.recalc_face_normals` on thin pointed shells (it flipped about a quarter
+  of FrostMaw's shards). Check with a centre test instead (`frostmaw.winding_check`).
+- **Preview what the game draws.** Render a copy of the export mesh with every face reversed and
+  every normal negated, with backface culling on (`frostmaw.game_preview`). A normal Blender
+  render hides culling bugs because Blender draws both sides.
 
 ## Starting a new skin (checklist)
 
