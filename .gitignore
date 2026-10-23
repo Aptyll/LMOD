@@ -32,6 +32,3 @@ renders/
 Thumbs.db
 __pycache__/
 *.pyc
-
-# Packaged mods (.fantome/.wad built from Riot files)
-mods/
