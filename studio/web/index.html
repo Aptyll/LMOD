@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Skin Studio</title>
+<link rel="stylesheet" href="/style.css">
+<script type="importmap">
+{ "imports": {
+    "three": "/vendor/three/three.module.min.js",
+    "three/addons/": "/vendor/three/addons/"
+} }
+</script>
+</head>
+<body>
+<header>
+  <b>Skin Studio</b>
+  <span class="live" id="live">OFFLINE</span>
+  <span class="chip" id="chip-claude"><i class="dot"></i><span>Claude</span></span>
+  <span class="chip" id="chip-blender"><i class="dot"></i><span>Blender</span></span>
+  <span class="chip step" id="step" hidden></span>
+  <span class="grow"></span>
+  <span class="chip muted" id="session"></span>
+</header>
+
+<main>
+  <section class="panel" id="p-viewport">
+    <h3>Blender viewport <span><span id="vp-age"></span> <button id="vp-toggle" class="mini on" title="Turn Blender's live frames on or off">Live: on</button></span></h3>
+    <div class="stage">
+      <img id="vp-img" alt="">
+      <div class="empty" id="vp-empty">Waiting for Blender.<br><small>Enable the Skin Studio add-on in Blender and press Start.</small></div>
+      <div class="badge" id="vp-badge" hidden></div>
+    </div>
+  </section>
+
+  <section class="panel" id="p-model">
+    <h3>Live 3D model <span id="model-age"></span></h3>
+    <div class="stage" id="model-stage">
+      <canvas id="model-canvas"></canvas>
+      <div class="empty" id="model-empty">No model yet.<br><small>Blender add-on: "Send model", or drop a .glb in studio/data/models.</small></div>
+      <div class="tabs" id="anims"></div>
+      <div class="tools">
+        <button id="cam-game" title="Roughly League's camera angle">Game camera</button>
+        <button id="cam-free" class="on" title="Drag to spin, scroll to zoom">Free</button>
+        <button id="anim-pause" class="on" title="Pausing stops all drawing work">❚❚ Pause</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel" id="p-feed">
+    <h3>Claude activity <span id="feed-state"></span></h3>
+    <div id="feed"></div>
+    <button id="jump" hidden>New activity ↓</button>
+  </section>
+
+  <section class="panel" id="p-gallery">
+    <h3>Gallery <span id="gal-count"></span></h3>
+    <div id="gallery"></div>
+  </section>
+</main>
+
+<dialog id="lightbox"><img alt=""><p></p></dialog>
+
+<script type="module" src="/app.js"></script>
+</body>
+</html>
