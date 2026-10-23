@@ -2,9 +2,9 @@
 
 **Concept:** Kog'Maw, long asleep in a swamp, wakes up overgrown.
 
-**Status:** polish v3 done, export to League format in progress (2026-10-22).
+**Status:** in game, working in Practice Tool (2026-10-23).
 
-Recipe: `scripts/mossmaw.py` plus the `moss` recipe in `scripts/recolor_texture.py` (PR #2).
+Recipe: `scripts/mossmaw.py` plus the `moss` recipe in `scripts/recolor_texture.py`.
 Working file on Noah's PC: `C:\NoahCode\LMOD\work\mossmaw.blend` (v1 and v2 copies beside it).
 
 ## Brief
@@ -33,5 +33,7 @@ Working file on Noah's PC: `C:\NoahCode\LMOD\work\mossmaw.blend` (v1 and v2 copi
 
 ## In game
 
-- Not yet. Plan: bake the glow into the texture, export on the original skeleton, package
-  in `mods\mossmaw\`, load with LTK Manager, test in Practice Tool.
+- Working in Practice Tool (Noah, 2026-10-23). Exported with `scripts/mossmaw_export.py` to one
+  `.skn` on the original `.skl` plus one `.tex`, packaged as `Mossmaw.fantome` in `mods\`,
+  loaded with LTK Manager 1.30.3 on the default skin.
+- Known issue: the mod once seemed missing from LTK Manager after a restart, then reappeared.
