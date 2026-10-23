@@ -659,6 +659,35 @@ def export_all(out_dir, tex):
                 "triangles": len(skn.indices) // 12, "winding": winding_check(ob, pieces)}
 
 
+# game paths for the art from frostmaw_art.py (champion icon, round icon, loading screen)
+GAME_ART = {
+    "frostmaw_icon_square.tex": "assets/characters/kogmaw/hud/kogmaw_square_0.tex",
+    "frostmaw_icon_circle.tex": "assets/characters/kogmaw/hud/kogmaw_circle_0.tex",
+    "frostmaw_loadscreen.tex": "assets/characters/kogmaw/skins/base/kogmawloadscreen.tex",
+}
+
+
+def package_mod(export_dir, extra_dir=None):
+    """Rebuild the .wad.client and .fantome in export_dir from its kogmaw.skn and texture, plus
+    any GAME_ART files found in extra_dir. A wrong game path only means that file is ignored."""
+    files = {GAME["skn"]: os.path.join(export_dir, "kogmaw.skn"),
+             GAME["tex"]: os.path.join(export_dir, "kogmaw_base_tx_cm.tex")}
+    for name, game_path in GAME_ART.items():
+        p = os.path.join(extra_dir or "", name)
+        if extra_dir and os.path.exists(p):
+            files[game_path] = p
+    data = {}
+    for game_path, p in files.items():
+        with open(p, "rb") as f:
+            data[game_path] = f.read()
+    wad_path = os.path.join(export_dir, mx.WAD_NAME)
+    mx._rs().build_wad_to_path(wad_path, data)
+    image = os.path.join(extra_dir or "", "frostmaw_loadscreen.png")
+    fantome = write_fantome(os.path.join(export_dir, NAME + ".fantome"), wad_path,
+                            image if extra_dir and os.path.exists(image) else None)
+    return {"fantome": fantome, "files": sorted(files)}
+
+
 # ------ previews: the exported mesh, culled like the game
 
 def game_preview(export_ob):
