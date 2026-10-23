@@ -16,6 +16,8 @@ pipeline, folder layout, and iteration loop.
   `scripts/`. A change that only exists in a `.blend` is lost on the next patch.
 - **Original skeleton only:** no new bones, at most 4 bone influences per vertex.
 - **Save `work/<skin>/<skin>_vN.blend` before every pass.** Never overwrite the base files.
+- **Never touch the open Blender scene or the PC's checkout for another skin's work.** Build
+  headless in a background Blender and keep run copies in `work/<skin>/scripts/`.
 
 ## Working with Noah
 
