@@ -154,16 +154,26 @@ script, rebuild from the rigged base, audit, and render. Each pass ends with a t
 
 ### 6. Export to League format
 
-This stage is being proven on Mossmaw right now. Update it with what worked.
+Proven on Mossmaw (`scripts/mossmaw_export.py`).
 
 - Join the new pieces into the body as one `.skn` on the original `.skl` (same bone names and
-  order, at most 4 influences per vertex). New pieces need UVs: either pack them into the
-  body texture or export a second submesh with its own texture and material in `skin0.bin`.
+  order, at most 4 influences per vertex). New pieces need UVs: Mossmaw packs each material
+  as a colour swatch into unused background of the body texture.
 - League has no live glow on champion meshes, so paint the glow into the texture.
-- Convert textures to `.tex` (Aventurine or ltk-tex-utils).
-- **Done when:** the exported `.skn` re-imported with Aventurine on the original `.skl` plays
-  run and idle cleanly.
-- **Picture:** the re-imported export, running.
+- Write textures as `.tex` (`mossmaw_export.write_tex`: uncompressed BGRA8; Aventurine only reads `.tex`).
+- **Winding: the game draws only front faces, and Aventurine mirrors positions on import and
+  export but keeps the triangle winding.** Riot's body is therefore inside-out by Blender's
+  rules, and a piece you build outward in Blender comes out inside-out in game: its outer
+  faces are culled and it looks see-through. Before joining, make each piece outward, fill
+  open shells, give cards a back face, then reverse its faces (`mossmaw_export._game_faces`).
+  A Blender render without culling hides this; only the League-like preview shows it.
+- **Done when:** the League-like preview (`mossmaw_export.league_preview`: fresh re-import,
+  texture read from the exported `.tex`, faces flipped to match the game, backface culling
+  on, 55 degree top-down camera) shows every piece solid, and run and idle play cleanly.
+- **Picture:** the League-like preview, before vs after when fixing a bug.
+- UI images (loading-screen card, HUD icons) are plain `.tex` files in the champion's WAD;
+  replace them at Riot's exact size (`scripts/mossmaw_portrait.py`). Champ select's splash
+  comes from the Riot client and can't be changed this way.
 
 ### 7. Package and load
 
