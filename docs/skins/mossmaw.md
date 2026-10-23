@@ -43,3 +43,5 @@ Working file on Noah's PC: `C:\NoahCode\LMOD\work\mossmaw.blend` (v1 and v2 copi
   Picture: `previews/mossmaw_bug_before_after.jpg`.
 - Loading-screen portrait: attack1 frame 14 in a fogged forest set
   (`previews/mossmaw_portrait.jpg`, `previews/mossmaw_loadscreen.jpg`, `previews/mossmaw_icons.jpg`).
+- Loaded with LTK Manager 1.30.3 on the default skin; press START after enabling.
+- Known issue: the mod once seemed missing from LTK Manager after a restart, then reappeared.
