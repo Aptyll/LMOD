@@ -112,10 +112,12 @@ function addEvents(events, initial = false) {
     } else if (ev.kind === "tool") {
       const row = el("div", "e");
       row.append(el("span", "t", hhmmss(ev.ts)), el("span", "k", ev.tool), document.createTextNode(ev.text || ""));
-      const mark = el("span", "pending", " …");
-      row.append(mark);
       feed.append(row);
-      if (ev.id) toolRows.set(ev.id, { row, mark });
+      if (ev.id) { // logged tool calls get a ✓ or ✗ when their result arrives
+        const mark = el("span", "pending", " …");
+        row.append(mark);
+        toolRows.set(ev.id, { row, mark });
+      }
     } else if (ev.kind === "result") {
       const hit = toolRows.get(ev.id);
       if (hit) {

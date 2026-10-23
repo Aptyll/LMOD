@@ -24,7 +24,12 @@ Noah watches one page at **http://localhost:7777**.
 bpy.ops.skinstudio.start()                               # stream the viewport
 bpy.ops.skinstudio.send_model()                          # refresh the 3D panel after a change
 bpy.ops.skinstudio.send_render(filepath=r"...\x.jpg")    # put a render in the gallery
+bpy.app.driver_namespace["studio_log"]("Baking the moss mask")  # a line in the activity feed
 ```
+
+The feed reads Claude Code logs on this PC. A cloud thread that drives Blender through the
+device link has no log here, so it should call `studio_log` at each step instead (or POST
+`{"kind": "note"|"tool", "text": ..., "tool": ...}` to `/api/events`).
 
 Show the current step in the header:
 `curl -X POST localhost:7777/api/status -d "{\"step\": \"Step 3/5: moss texture pass\"}"`

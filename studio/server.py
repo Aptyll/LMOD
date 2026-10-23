@@ -484,6 +484,26 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(400, b"images only")
             atomic_write(DATA / "gallery" / name, body)
             return self.send_json({"ok": True, "name": name})
+        if url.path == "/api/events":
+            # For sessions whose log isn't on this PC (a cloud thread driving Blender remotely).
+            try:
+                data = json.loads(body)
+            except ValueError:
+                return self.send(400, b"json please")
+            items = data if isinstance(data, list) else [data]
+            events = []
+            for it in items[:50]:
+                kind = it.get("kind", "note")
+                if kind not in ("note", "tool", "user"):
+                    continue
+                events.append({
+                    "kind": kind,
+                    "ts": it.get("ts") or time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                    "tool": short(it.get("tool", "step"), 40),
+                    "text": short(it.get("text", ""), 600),
+                })
+            HUB.add_events(events)
+            return self.send_json({"ok": True, "added": len(events)})
         if url.path == "/api/status":
             try:
                 data = json.loads(body or b"{}")

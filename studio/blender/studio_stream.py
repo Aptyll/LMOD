@@ -9,6 +9,7 @@ From a script or the Blender MCP:
     bpy.ops.skinstudio.start()        start sending viewport frames
     bpy.ops.skinstudio.send_model()   export the visible scene as .glb to the 3D panel
     bpy.ops.skinstudio.send_render(filepath=r"...jpg")   put an image in the gallery
+    bpy.app.driver_namespace["studio_log"]("text")   add a line to the activity feed
 """
 
 bl_info = {
@@ -106,6 +107,14 @@ def png_bytes(rgba, w, h):
         + chunk(b"IDAT", zlib.compress(raw, 1))
         + chunk(b"IEND", b"")
     )
+
+
+def studio_log(text, kind="note", tool="blender"):
+    """Add a line to the studio's activity feed. Handy from the Blender MCP:
+    bpy.app.driver_namespace["studio_log"]("Baking the moss mask")"""
+    body = json.dumps({"kind": kind, "text": text, "tool": tool}).encode()
+    post("/api/events", body, {"Content-Type": "application/json"}, wait=True)
+    return not _last_error
 
 
 # ------------------------------------------------------------------ capture
@@ -360,6 +369,7 @@ def register():
         bpy.utils.register_class(c)
     if _on_save not in bpy.app.handlers.save_post:
         bpy.app.handlers.save_post.append(_on_save)
+    bpy.app.driver_namespace["studio_log"] = studio_log
 
 
 def unregister():
