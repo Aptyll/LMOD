@@ -48,9 +48,14 @@ Working files on Noah's PC: `C:\NoahCode\LMOD\work\frostmaw\` (`frostmaw_vN.blen
 | --- | --- | --- | --- |
 | v1 | 2026-10-23 | Frost texture, 33 pieces, first game-culled previews | `previews/frostmaw_v1_hero.jpg` |
 | v2 | 2026-10-23 | Bigger, brighter crystals, thinner veins, every shard verified to face out after export | `previews/frostmaw_original_v2.jpg`, `previews/frostmaw_v2_game.jpg` |
+| art | 2026-10-23 | Champion icon, loading screen, frost ability icons | `previews/frostmaw_art_v1.jpg`, `previews/frostmaw_ability_icons.jpg` |
 
 ## In game
 
 - Not yet tested. Last built on patch 16.21.
-- Ability icons and a W animation are planned, and need a copy of `KogMaw.wad.client` in
-  `base\kogmaw\wad\` first.
+- The mod also carries the art: frost ability icons (`scripts/frost_icons.py`, from the icons in
+  `base\kogmaw\ui\`), the champion icon (square and round) and a loading-screen portrait
+  (`scripts/frostmaw_art.py`). The game paths are the standard base-skin ones in
+  `frostmaw.GAME_ART` and `frostmaw.ICON_DIR`; if one is wrong, that file is just ignored.
+  Repackage without a rebuild: `blender -b --python frostmaw.py -- package EXPORT_DIR ART_DIR ICONS_DIR`.
+- A W animation is planned. It needs a copy of `KogMaw.wad.client` to find W's animation first.
