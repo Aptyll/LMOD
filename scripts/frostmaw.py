@@ -667,15 +667,23 @@ GAME_ART = {
 }
 
 
-def package_mod(export_dir, extra_dir=None):
+ICON_DIR = "assets/characters/kogmaw/hud/icons2d/"   # ability icons (frost_icons.py keeps the file names)
+
+
+def package_mod(export_dir, extra_dir=None, icons_dir=None):
     """Rebuild the .wad.client and .fantome in export_dir from its kogmaw.skn and texture, plus
-    any GAME_ART files found in extra_dir. A wrong game path only means that file is ignored."""
+    any GAME_ART files found in extra_dir and kogmaw_*.dds ability icons in icons_dir.
+    A wrong game path only means that file is ignored."""
     files = {GAME["skn"]: os.path.join(export_dir, "kogmaw.skn"),
              GAME["tex"]: os.path.join(export_dir, "kogmaw_base_tx_cm.tex")}
     for name, game_path in GAME_ART.items():
         p = os.path.join(extra_dir or "", name)
         if extra_dir and os.path.exists(p):
             files[game_path] = p
+    if icons_dir:
+        for name in sorted(os.listdir(icons_dir)):
+            if name.startswith("kogmaw_") and name.endswith(".dds"):
+                files[ICON_DIR + name] = os.path.join(icons_dir, name)
     data = {}
     for game_path, p in files.items():
         with open(p, "rb") as f:
@@ -810,9 +818,14 @@ def render_league_strip(out_jpg, action="kogmaw_run", frame=6, size=320):
 
 
 def main(argv):
-    """blender -b kogmaw_rigged.blend --python frostmaw.py -- OUT_DIR VERSION"""
+    """blender -b kogmaw_rigged.blend --python frostmaw.py -- OUT_DIR VERSION
+    blender -b --python frostmaw.py -- package EXPORT_DIR ART_DIR ICONS_DIR   (repackage only)"""
     import bpy
     args = argv[argv.index("--") + 1:] if "--" in argv else []
+    if args and args[0] == "package":
+        res = package_mod(*args[1:4])
+        print("PACKAGED", res)
+        return res
     out_dir = args[0]
     ver = args[1] if len(args) > 1 else "v1"
     root = os.environ.get("LMOD_ROOT", r"C:\NoahCode\LMOD")
