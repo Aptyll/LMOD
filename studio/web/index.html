@@ -25,7 +25,7 @@
 
 <main>
   <section class="panel" id="p-viewport">
-    <h3>Blender viewport <span id="vp-age"></span></h3>
+    <h3>Blender viewport <span><span id="vp-age"></span> <button id="vp-toggle" class="mini on" title="Turn Blender's live frames on or off">Live: on</button></span></h3>
     <div class="stage">
       <img id="vp-img" alt="">
       <div class="empty" id="vp-empty">Waiting for Blender.<br><small>Enable the Skin Studio add-on in Blender and press Start.</small></div>
@@ -42,6 +42,7 @@
       <div class="tools">
         <button id="cam-game" title="Roughly League's camera angle">Game camera</button>
         <button id="cam-free" class="on" title="Drag to spin, scroll to zoom">Free</button>
+        <button id="anim-pause" class="on" title="Pausing stops all drawing work">❚❚ Pause</button>
       </div>
     </div>
   </section>

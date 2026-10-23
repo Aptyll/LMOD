@@ -3,7 +3,7 @@
   --moss: #8fd16a; --gold: #e6c35c; --red: #e0614f; --blue: #79b8ff; --note: #1b2421;
 }
 * { box-sizing: border-box; }
-[hidden] { display: none !important; }
+[hidden], img:not([src]), .chip:empty { display: none !important; }
 html, body { height: 100%; }
 body { margin: 0; background: var(--bg); color: var(--txt); font: 13px/1.45 Inter, system-ui, "Segoe UI", sans-serif; display: flex; flex-direction: column; }
 
@@ -26,7 +26,9 @@ main { flex: 1; min-height: 0; display: grid; gap: 10px; padding: 10px;
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; min-height: 0; position: relative; }
 .panel h3 { margin: 0; flex: none; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); padding: 9px 12px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; gap: 8px; }
 .panel h3 span { color: var(--moss); text-transform: none; letter-spacing: 0; }
-.panel h3 span.stale { color: var(--dim); }
+.panel h3 span.stale, .panel h3 #vp-age.stale { color: var(--dim); }
+.mini { font: inherit; font-size: 10px; letter-spacing: 0; text-transform: none; margin-left: 6px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line); background: transparent; color: var(--dim); cursor: pointer; }
+.mini.on { border-color: var(--moss); color: var(--moss); }
 
 .stage { flex: 1; min-height: 0; position: relative; background: #1a211f; }
 .stage img, .stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; display: block; }

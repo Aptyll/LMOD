@@ -9,8 +9,11 @@ const now = () => Date.now() / 1000 + clockSkew;
 
 // ------------------------------------------------------------ live connection
 
+// The page disconnects from the live feed while its tab is hidden, and reloads state on return.
+let es = null;
 function connect() {
-  const es = new EventSource("/events");
+  if (es) return;
+  es = new EventSource("/events");
   es.onmessage = (ev) => {
     const msg = JSON.parse(ev.data);
     if (msg.type === "hello") {
@@ -26,6 +29,25 @@ function connect() {
   };
   es.onerror = () => setLive(false); // EventSource retries on its own
 }
+function disconnect() {
+  if (es) { es.close(); es = null; }
+  setLive(false);
+}
+// Tell the server whether this tab is visible. Blender only captures frames while some tab is.
+const tabId = Math.random().toString(36).slice(2);
+function presence(visible) {
+  const body = JSON.stringify({ tab: tabId, visible });
+  if (!visible && navigator.sendBeacon) navigator.sendBeacon("/api/presence", body);
+  else fetch("/api/presence", { method: "POST", body, keepalive: true }).catch(() => {});
+}
+setInterval(() => { if (!document.hidden) presence(true); }, 10000);
+addEventListener("pagehide", () => presence(false));
+document.addEventListener("visibilitychange", () => {
+  presence(!document.hidden);
+  if (document.hidden) disconnect();
+  else connect();
+  requestRender();
+});
 
 function setLive(on) {
   $("live").textContent = on ? "LIVE" : "OFFLINE";
@@ -37,6 +59,10 @@ function applyState(changes, first = false) {
   if ("session" in changes && changes.session) $("session").textContent = `session ${changes.session.name}`;
   if ("step" in changes) { $("step").hidden = !changes.step; $("step").textContent = changes.step || ""; }
   if ("viewport" in changes && changes.viewport) showViewport(changes.viewport);
+  if ("viewport_enabled" in changes) {
+    $("vp-toggle").classList.toggle("on", changes.viewport_enabled);
+    $("vp-toggle").textContent = changes.viewport_enabled ? "Live: on" : "Live: off";
+  }
   if ("model" in changes) loadModel(changes.model);
   if ("gallery" in changes) showGallery(changes.gallery, first);
   tick();
@@ -81,6 +107,14 @@ function showViewport(vp) {
   $("vp-badge").hidden = !bits.length;
   $("vp-badge").textContent = bits.join(" · ");
 }
+
+$("vp-toggle").onclick = () => {
+  fetch("/api/settings", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ viewport_enabled: !state.viewport_enabled }),
+  });
+};
 
 // ----------------------------------------------------------------------- feed
 
@@ -171,7 +205,7 @@ $("lightbox").onclick = () => $("lightbox").close();
 
 const canvas = $("model-canvas");
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setPixelRatio(1); // full-res on hi-dpi screens costs 2-4x the GPU for little gain here
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.setClearColor(0x1a211f);
@@ -195,10 +229,21 @@ let current = null; // { root, mixer, clips, url, name, size, center }
 let activeClip = null;
 let camMode = "free";
 let loadingUrl = null;
+let paused = false;
+try { paused = localStorage.getItem("studio.paused") === "1"; } catch {}
+function setPaused(p) {
+  paused = p;
+  $("anim-pause").textContent = p ? "▶ Play" : "❚❚ Pause";
+  $("anim-pause").classList.toggle("on", !p);
+  try { localStorage.setItem("studio.paused", p ? "1" : "0"); } catch {}
+  requestRender();
+}
+$("anim-pause").onclick = () => setPaused(!paused);
 
 function resize() {
   const r = $("model-stage").getBoundingClientRect();
   renderer.setSize(r.width, r.height, false);
+  requestRender();
   camera.aspect = r.width / Math.max(1, r.height);
   camera.updateProjectionMatrix();
 }
@@ -239,6 +284,7 @@ function setCamera(mode) {
   camera.updateProjectionMatrix();
   controls.target.copy(center);
   controls.update();
+  requestRender();
 }
 $("cam-game").onclick = () => setCamera("game");
 $("cam-free").onclick = () => setCamera("free");
@@ -258,11 +304,16 @@ function playClip(name) {
   const clip = current.clips.find((c) => c.name === name);
   if (clip) current.mixer.clipAction(clip).reset().play();
   for (const b of $("anims").children) b.classList.toggle("on", b.dataset.clip === name);
+  if (paused) { current.mixer.update(0); }
+  requestRender();
 }
 
-function shortClipName(name) {
-  // "kogmaw_run" or "Armature|kogmaw_run" -> "run"
-  return name.split("|").pop().replace(/^[a-z]+_(?=[a-z])/i, "");
+function clipLabels(clips) {
+  // "kogmaw_run", "kogmaw_idle1" -> "run", "idle1" (only a prefix that every clip shares)
+  const names = clips.map((c) => c.name.split("|").pop());
+  const pre = names.length > 1 ? names[0].match(/^[^_]+_/)?.[0] : null;
+  const strip = pre && names.every((n) => n.startsWith(pre) && n.length > pre.length);
+  return names.map((n) => (strip ? n.slice(pre.length) : n));
 }
 
 function loadModel(model) {
@@ -285,8 +336,9 @@ function loadModel(model) {
 
       const tabs = $("anims");
       tabs.replaceChildren();
-      for (const c of gltf.animations) {
-        const b = el("button", null, shortClipName(c.name));
+      const labels = clipLabels(gltf.animations);
+      for (const [i, c] of gltf.animations.entries()) {
+        const b = el("button", null, labels[i]);
         b.dataset.clip = c.name;
         b.title = c.name;
         b.onclick = () => playClip(c.name);
@@ -296,6 +348,7 @@ function loadModel(model) {
       if (gltf.animations.length) playClip(keep ? activeClip : pickDefaultClip(gltf.animations));
       mixer.update(0);
       Object.assign(current, frame(root));
+      requestRender();
 
       if (keepCam && camMode === "free") {
         camera.position.copy(keepCam.pos);
@@ -308,11 +361,26 @@ function loadModel(model) {
   );
 }
 
-renderer.setAnimationLoop(() => {
+// Draw only when something moves: at most 30 fps while an animation plays, otherwise only
+// after the camera moves, a model loads or the panel resizes. Paused or hidden = no GPU work.
+let needsRender = true;
+let lastDraw = 0;
+function requestRender() { needsRender = true; }
+controls.addEventListener("change", requestRender);
+function loop(t) {
+  requestAnimationFrame(loop);
+  if (document.hidden) return; // browsers mostly stop this loop in hidden tabs anyway
+  const animating = current && activeClip && !paused;
+  const damping = controls.update(); // true while the camera is still gliding
+  if (!(animating || needsRender || damping)) { clock.getDelta(); return; }
+  if (animating && t - lastDraw < 1000 / 30 && !needsRender) return;
+  lastDraw = t;
   const dt = clock.getDelta();
-  if (current) current.mixer.update(dt);
-  controls.update();
+  if (animating) current.mixer.update(Math.min(dt, 0.1));
   renderer.render(scene, camera);
-});
+  needsRender = false;
+}
+requestAnimationFrame(loop);
 
-connect();
+setPaused(paused);
+if (!document.hidden) { connect(); presence(true); }

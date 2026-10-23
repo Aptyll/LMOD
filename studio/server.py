@@ -55,6 +55,7 @@ class Hub:
         self.lock = threading.Lock()
         self.clients: list[queue.Queue] = []
         self.events: deque[dict] = deque(maxlen=MAX_EVENTS)
+        self.tabs: dict[str, float] = {}  # visible studio tabs -> last ping
         self.state: dict = {
             "session": None,
             "step": "",
@@ -63,6 +64,8 @@ class Hub:
             "model": None,
             "gallery": [],
             "last_activity": 0,
+            "viewers": 0,  # studio tabs open and visible right now (see /api/presence)
+            "viewport_enabled": True,  # the page's "Live viewport" switch
         }
 
     def subscribe(self) -> queue.Queue:
@@ -101,6 +104,32 @@ class Hub:
         with self.lock:
             self.state.update(changes)
         self.publish({"type": "state", "state": changes})
+
+    def presence(self, tab: str, visible: bool) -> None:
+        """Pages report when they are shown or hidden, and ping every 10 s while shown."""
+        with self.lock:
+            if visible:
+                self.tabs[tab] = time.time()
+            else:
+                self.tabs.pop(tab, None)
+        self.viewers()
+
+    def viewers(self) -> int:
+        cutoff = time.time() - 25
+        with self.lock:
+            for k in [k for k, t in self.tabs.items() if t < cutoff]:
+                del self.tabs[k]
+            n = len(self.tabs)
+            changed = n != self.state["viewers"]
+        if changed:
+            self.set_state(viewers=n)
+        return n
+
+    def blender_reply(self) -> dict:
+        """What the Blender add-on needs to decide whether to capture at all."""
+        n = self.viewers()
+        with self.lock:
+            return {"ok": True, "viewers": n, "viewport_enabled": self.state["viewport_enabled"]}
 
     def clear_events(self) -> None:
         with self.lock:
@@ -471,7 +500,7 @@ class Handler(BaseHTTPRequestHandler):
                 "mode": self.headers.get("X-Mode", ""),
             }
             HUB.set_state(viewport=info, blender=info)
-            return self.send_json({"ok": True})
+            return self.send_json(HUB.blender_reply())
         if url.path == "/api/model":
             name = safe_name(qs.get("name", ["model.glb"])[0], "model.glb")
             if not name.lower().endswith(".glb"):
@@ -515,6 +544,21 @@ class Handler(BaseHTTPRequestHandler):
             if "blender" in data:  # heartbeat from the add-on
                 changes["blender"] = {"t": time.time(), **{k: str(v) for k, v in data["blender"].items()}}
             HUB.set_state(**changes)
+            return self.send_json(HUB.blender_reply())
+        if url.path == "/api/presence":
+            try:
+                data = json.loads(body)
+            except ValueError:
+                return self.send(400, b"json please")
+            HUB.presence(str(data.get("tab", ""))[:40], bool(data.get("visible")))
+            return self.send_json({"ok": True})
+        if url.path == "/api/settings":  # switches on the page
+            try:
+                data = json.loads(body or b"{}")
+            except ValueError:
+                return self.send(400, b"json please")
+            if "viewport_enabled" in data:
+                HUB.set_state(viewport_enabled=bool(data["viewport_enabled"]))
             return self.send_json({"ok": True})
         return self.send(404, b"not found")
 
@@ -530,7 +574,7 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.flush()
             while True:
                 try:
-                    msg = q.get(timeout=15)
+                    msg = q.get(timeout=5)  # short, so a closed tab is noticed within ~5 s
                     payload = f"data: {json.dumps(msg)}\n\n"
                 except queue.Empty:
                     payload = ": ping\n\n"
