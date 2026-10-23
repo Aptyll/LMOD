@@ -568,7 +568,15 @@ def main() -> None:
     TranscriptTailer(Path(args.claude_projects).expanduser(), args.match).start()
     FileWatcher(gallery_dirs, model_dirs).start()
 
-    httpd = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
+    class Server(ThreadingHTTPServer):
+        # On Windows, address reuse lets a second copy bind the same port silently.
+        allow_reuse_address = os.name != "nt"
+
+    try:
+        httpd = Server(("127.0.0.1", args.port), Handler)
+    except OSError:
+        print(f"Port {args.port} is busy. Skin Studio is probably already running: open http://localhost:{args.port}")
+        return
     httpd.daemon_threads = True
     url = f"http://localhost:{args.port}"
     print(f"Skin Studio running at {url}  (Ctrl+C to stop)")
