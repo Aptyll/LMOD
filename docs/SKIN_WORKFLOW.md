@@ -68,6 +68,8 @@ C:\NoahCode\LMOD\                  (this repo, public)
   work\<skin>\scripts\             IGNORED. the copies a headless run uses (see "Two skins at once")
   work\<skin>\previews\            IGNORED. renders and the audit report, before they go to `previews`
   mods\<skin>\                     IGNORED. Packaged .fantome / .modpkg
+  studio\                          Skin Studio: local live page (see studio\README.md)
+  studio\data\                     IGNORED. models, gallery images and viewport frames it shows
 
 C:\NoahCode\LMOD_previews\         git worktree on the orphan `previews` branch
   previews\<skin>_v<N>_<view>.jpg  rendered pictures only, never merged
@@ -182,6 +184,12 @@ This stage is being proven on Mossmaw right now. Update it with what worked.
 4. **Show.** Push the JPEGs to `previews`, then post them in the thread with two or three
    lines on what changed and one recommendation for the next pass.
 5. **React.** Noah answers in a few words ("more moss", "keep polishing"). That is the next brief.
+
+**Live view.** If Skin Studio is running (`studio\start.bat`, then http://localhost:7777),
+Noah can watch the work as it happens. During a PC session: run `bpy.ops.skinstudio.start()`
+once, call `bpy.ops.skinstudio.send_model()` after each rebuild, and post the current step to
+`/api/status`. Renders saved in `work\<skin>\previews\` show up in its gallery on their own.
+The thread pictures above are still required, because Noah isn't always at the PC.
 
 ### Visual proof rules
 

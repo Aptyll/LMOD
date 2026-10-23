@@ -32,3 +32,6 @@ renders/
 Thumbs.db
 __pycache__/
 *.pyc
+
+# Skin Studio local data (renders, models and viewport frames from Riot-based skins)
+studio/data/
