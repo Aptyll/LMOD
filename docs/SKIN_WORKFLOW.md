@@ -154,22 +154,31 @@ script, rebuild from the rigged base, audit, and render. Each pass ends with a t
 
 ### 6. Export to League format
 
-Proven on Mossmaw (`scripts/mossmaw_export.py`).
+Proven on Mossmaw (in Practice Tool, 2026-10-23) with `scripts/mossmaw_export.py`. Copy it
+for a new skin and change the names and game paths at the top.
 
-- Join the new pieces into the body as one `.skn` on the original `.skl` (same bone names and
-  order, at most 4 influences per vertex). New pieces need UVs: Mossmaw packs each material
-  as a colour swatch into unused background of the body texture.
-- League has no live glow on champion meshes, so paint the glow into the texture.
-- Write textures as `.tex` (`mossmaw_export.write_tex`: uncompressed BGRA8; Aventurine only reads `.tex`).
+- **One mesh, one texture.** League's base skin draws one submesh with one texture, so the
+  new pieces join the body as one `.skn`. Each new material is baked into a small colour
+  swatch painted into an unused (background) area of the body texture, and its faces get
+  UVs inside that swatch. Shading baked onto the hide (like Mossmaw's darkening under the
+  moss) goes into the texture too.
+- **Original skeleton.** Join everything in the rest pose and write the `.skn` against the
+  original `.skl`: same bones, same order, at most 4 influences per vertex. No `.skl` is exported.
+- **No live glow.** The game shader has no emission, so glow is baked in as bright colour.
+- **Texture.** Write the atlas as `.tex` (`mossmaw_export.write_tex`: uncompressed BGRA8; Aventurine
+  only reads `.tex`) at the game path of the original texture, plus a `.png` copy for checking.
 - **Winding: the game draws only front faces, and Aventurine mirrors positions on import and
   export but keeps the triangle winding.** Riot's body is therefore inside-out by Blender's
   rules, and a piece you build outward in Blender comes out inside-out in game: its outer
   faces are culled and it looks see-through. Before joining, make each piece outward, fill
   open shells, give cards a back face, then reverse its faces (`mossmaw_export._game_faces`).
   A Blender render without culling hides this; only the League-like preview shows it.
+- `export_all(OUT_DIR)` writes the `.skn`, `.tex`/`.png`, a `.wad.client` holding only those
+  files, and the `.fantome`.
 - **Done when:** the League-like preview (`mossmaw_export.league_preview`: fresh re-import,
   texture read from the exported `.tex`, faces flipped to match the game, backface culling
-  on, 55 degree top-down camera) shows every piece solid, and run and idle play cleanly.
+  on, 55 degree top-down camera) shows every piece solid, and the exported `.skn` re-imported
+  on the original `.skl` plays run and idle cleanly.
 - **Picture:** the League-like preview, before vs after when fixing a bug.
 - UI images (loading-screen card, HUD icons) are plain `.tex` files in the champion's WAD;
   replace them at Riot's exact size (`scripts/mossmaw_portrait.py`). Champ select's splash
@@ -177,10 +186,15 @@ Proven on Mossmaw (`scripts/mossmaw_export.py`).
 
 ### 7. Package and load
 
-- Package a `.fantome` / `.modpkg` that replaces only that champion's base skin files.
-  Keep it in `mods\<skin>\`.
-- Add it in LTK Manager, then test in **Practice Tool** first.
-- **Picture:** LTK Manager with the mod listed, then an in-game screenshot.
+- The `.fantome` replaces only the champion's base skin mesh and texture. Keep it in
+  `mods\<skin>\` (ignored by git).
+- **LTK Manager 1.30.3:** Import, pick the `.fantome`, then click the mod's card to enable it
+  in the Default profile. Press **START** before the game loads.
+- In game, pick the champion's **default skin**. The mod replaces the base skin only.
+- Test in **Practice Tool** first.
+- **Picture:** LTK Manager with the mod enabled, then an in-game screenshot.
+- **Open oddity:** after one restart the mod seemed missing from LTK Manager, then reappeared.
+  Cause unknown. If it happens, check the mod list again before re-importing.
 
 ## The iteration loop
 
