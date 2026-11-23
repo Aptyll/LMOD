@@ -2,9 +2,10 @@
 
 **Concept:** Kog'Maw, long asleep in a swamp, wakes up overgrown.
 
-**Status:** polish v3 done, export to League format in progress (2026-10-22).
+**Status:** v3 in game as mod v1.1.0 with a custom loading-screen portrait (2026-10-23).
 
-Recipe: `scripts/mossmaw.py` plus the `moss` recipe in `scripts/recolor_texture.py` (PR #2).
+Recipe: `scripts/mossmaw.py` plus the `moss` recipe in `scripts/recolor_texture.py`; export in
+`scripts/mossmaw_export.py`, portrait in `scripts/mossmaw_portrait.py`.
 Working file on Noah's PC: `C:\NoahCode\LMOD\work\mossmaw.blend` (v1 and v2 copies beside it).
 
 ## Brief
@@ -33,5 +34,12 @@ Working file on Noah's PC: `C:\NoahCode\LMOD\work\mossmaw.blend` (v1 and v2 copi
 
 ## In game
 
-- Not yet. Plan: bake the glow into the texture, export on the original skeleton, package
-  in `mods\mossmaw\`, load with LTK Manager, test in Practice Tool.
+- `mods\Mossmaw.fantome`, v1.1.0, loaded in LTK Manager (healthy on 16.21). It replaces five
+  files in `KogMaw.wad.client`: `kogmaw.skn`, `kogmaw_base_tx_cm.tex`,
+  `kogmawloadscreen.tex` (308 x 560), `hud/kogmaw_circle_0.tex` and `hud/kogmaw_square_0.tex` (128 x 128).
+- v1.0.0 looked see-through in game: Aventurine keeps winding while mirroring positions, so
+  the moss came out inside-out and the game culled its outer faces. v1.1.0 fixes the winding,
+  closes the cushion shells and makes cards double-sided (about 10.9k triangles in all).
+  Picture: `previews/mossmaw_bug_before_after.jpg`.
+- Loading-screen portrait: attack1 frame 14 in a fogged forest set
+  (`previews/mossmaw_portrait.jpg`, `previews/mossmaw_loadscreen.jpg`, `previews/mossmaw_icons.jpg`).
